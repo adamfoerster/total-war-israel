@@ -358,6 +358,10 @@ func _unhandled_input(ev: InputEvent) -> void:
 			rig.zoom(0.88)
 		elif mb.button_index == MOUSE_BUTTON_WHEEL_DOWN and mb.pressed:
 			rig.zoom(1.14)
+		elif mb.button_index == MOUSE_BUTTON_LEFT and mb.pressed:
+			var own := _own_banner_at(mb.position)
+			if own != null:
+				select_card(own, mb.shift_pressed or mb.ctrl_pressed)
 		elif mb.button_index == MOUSE_BUTTON_RIGHT:
 			if mb.pressed:
 				rc_start = mb.position
@@ -378,6 +382,22 @@ func _unhandled_input(ev: InputEvent) -> void:
 			select_all()
 		elif k == KEY_ESCAPE:
 			selected.clear()
+
+## Unidade própria cujo estandarte está sob o ponto da tela (retângulo 34 x 18).
+func _own_banner_at(screen: Vector2) -> Unit:
+	var best: Unit = null
+	var bd := 1e9
+	for u: Unit in sim.units:
+		if u.side != 0 or u.state != 0:
+			continue
+		var sp = hud.banner_pos.get(u)
+		if sp == null:
+			continue
+		var d: Vector2 = (screen - (sp as Vector2)).abs()
+		if d.x <= 17.0 and d.y <= 9.0 and d.length() < bd:
+			bd = d.length()
+			best = u
+	return best
 
 func _enemy_at(screen: Vector2, ground) -> Unit:
 	var best: Unit = null

@@ -2,7 +2,7 @@
 
 Jogo de batalhas táticas em tempo real ambientado na Terra Prometida nos tempos do Antigo Testamento. Feito em Godot 4 e jogado no navegador.
 
-A versão 0.1.0 tem um único mapa, Jerusalém, construído a partir de dados reais de elevação, e uma batalha contra a IA.
+A versão 0.2.0 tem um único mapa, Jerusalém, construído a partir de dados reais de elevação, e uma batalha contra a IA.
 
 ## Como jogar
 
@@ -16,8 +16,8 @@ Perde o lado que ficar sem nenhuma unidade sob controle.
 
 | Ação | Controle |
 | --- | --- |
-| Selecionar unidade | Clique no card |
-| Selecionar várias | Ctrl ou Shift + clique no card |
+| Selecionar unidade | Clique no card ou no estandarte dela no campo |
+| Selecionar várias | Ctrl ou Shift + clique no card ou no estandarte |
 | Selecionar todas | Ctrl+A |
 | Mover | Botão direito no terreno (arraste para definir a direção da frente) |
 | Atacar | Botão direito no estandarte inimigo |

@@ -61,3 +61,11 @@ O alvo é 20 × 20 unidades de 300 homens no navegador. O custo por tick vem dos
 ## Verificação no navegador
 
 O painel de navegador do app cai para cerca de 1 FPS quando está oculto. Números de FPS e de tick lidos nessa situação não valem como medida.
+
+## Novos recursos: documentação, changelog e versão
+
+Todo recurso novo do jogo (unidade, mecânica, tela, controle, opção) só está pronto quando o mesmo commit também:
+
+1. Descreve o recurso no `README.md`, na seção correspondente (Como jogar, Controles, Unidades, Status, Terreno etc.), e remove de "Limitações conhecidas" o que deixou de valer.
+2. Registra a mudança no `CHANGELOG.md`, em uma nova seção `## [x.y.z] - AAAA-MM-DD` (Adicionado, Alterado, Corrigido), no formato Keep a Changelog.
+3. Aumenta a versão (semver: recurso novo = minor, correção = patch, mudança incompatível = major) e a atualiza nos três lugares: `config/version` em `project.godot`, o título da seção do `CHANGELOG.md` e a menção da versão no início do `README.md`.

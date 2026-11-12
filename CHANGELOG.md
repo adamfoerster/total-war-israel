@@ -4,6 +4,12 @@ Todas as mudanças relevantes deste projeto são registradas aqui.
 
 O formato segue o [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e o projeto usa [versionamento semântico](https://semver.org/lang/pt-BR/).
 
+## [0.2.0] - 2026-11-12
+
+### Adicionado
+
+- Seleção de unidades clicando no estandarte dela no campo; Ctrl ou Shift + clique soma ou tira da seleção.
+
 ## [0.1.0] - 2026-11-12
 
 Primeira versão jogável.
