@@ -13,6 +13,7 @@ const AI = preload("res://scripts/ai_commander.gd")
 const Models = preload("res://scripts/models.gd")
 const CameraRig = preload("res://scripts/camera_rig.gd")
 const Hud = preload("res://scripts/ui/battle_hud.gd")
+const Sfx = preload("res://scripts/sfx.gd")
 
 var army: Array = []          # [{type, men, general}]
 var terrain: TerrainData
@@ -20,12 +21,15 @@ var sim: BattleSim
 var ai: AI
 var rig: CameraRig
 var hud: Hud
+var sfx
+var fight_t := 0.0   # intervalo até o próximo som de combate
 var nodes: Array = []         # MultiMeshInstance3D por unidade
 var bufs: Array = []          # PackedFloat32Array por unidade
 var last_facing: Array = []
 var view_c: Array = []        # pose (centro, frente) em que cada buffer foi gravado
 var view_f: Array = []
 var selected: Array = []
+var sel_anchor = null   # última unidade selecionada sem Shift (início do intervalo)
 var ready_ok := false
 var paused := false
 var speed := 1.0
@@ -34,6 +38,7 @@ var since_tick := 0.0
 var tick_ms := 0.0
 var rc_start := Vector2.ZERO
 var rc_ground = null
+var rc_held := false   # botão direito pressionado (ordem em andamento)
 var marker: MeshInstance3D
 var marker_t := 0.0
 var arrows: MultiMeshInstance3D
@@ -153,6 +158,8 @@ func _build_world() -> void:
 	rig = CameraRig.new()
 	rig.terrain = terrain
 	add_child(rig)
+	sfx = Sfx.new()
+	add_child(sfx)
 	hud = Hud.new()
 	hud.battle = self
 	add_child(hud)
@@ -187,6 +194,7 @@ func _process(delta: float) -> void:
 			elif u.state == 1:
 				(nodes[k] as Node3D).position = Vector3(u.vel.x, 0.0, u.vel.y) * (since_tick + (sim.tick_n - u.rout_stamp) * Cfg.TICK)
 	_update_arrows(delta * (0.0 if paused else speed))
+	_combat_sound(delta)
 	if marker_t > 0.0:
 		marker_t -= delta
 		marker.visible = marker_t > 0.0
@@ -194,6 +202,24 @@ func _process(delta: float) -> void:
 		ended = true
 		selected.clear()
 		hud.show_result()
+		sfx.play("win" if sim.winner == 0 else "lose")
+
+## Som de espadas enquanto houver corpo a corpo; mais unidades em contato, mais alto.
+func _combat_sound(delta: float) -> void:
+	if paused or ended:
+		return
+	fight_t -= delta
+	if fight_t > 0.0:
+		return
+	var n := 0
+	for u: Unit in sim.units:
+		if u.state == 0 and u.contacts > 0:
+			n += 1
+	if n == 0:
+		return
+	if not sfx.playing("sword"):
+		sfx.play("sword", -14.0 + minf(n, 8) * 1.5)
+	fight_t = 1.0
 
 func _sync_view(force: bool) -> void:
 	for k in nodes.size():
@@ -309,8 +335,21 @@ func player_units() -> Array:
 	return out
 
 func select_card(u: Unit, additive: bool) -> void:
+	sfx.play("click", -4.0)
 	if u.state != 0:
 		return
+	var shift := Input.is_key_pressed(KEY_SHIFT)
+	if shift and sel_anchor != null and (sel_anchor as Unit).state == 0:
+		# Shift: seleciona todos os cards entre a âncora e a unidade clicada
+		var all := player_units()
+		var a := all.find(sel_anchor)
+		var b := all.find(u)
+		if a >= 0 and b >= 0:
+			for i in range(mini(a, b), maxi(a, b) + 1):
+				var o: Unit = all[i]
+				if o.state == 0 and not (o in selected):
+					selected.append(o)
+			return
 	if additive:
 		if u in selected:
 			selected.erase(u)
@@ -318,8 +357,10 @@ func select_card(u: Unit, additive: bool) -> void:
 			selected.append(u)
 	else:
 		selected = [u]
+	sel_anchor = u
 
 func select_all() -> void:
+	sfx.play("click", -4.0)
 	selected.clear()
 	for u: Unit in sim.units:
 		if u.side == 0 and u.state == 0:
@@ -329,6 +370,7 @@ func _prune() -> void:
 	selected = selected.filter(func(u): return u.state == 0)
 
 func cmd_run_toggle() -> void:
+	sfx.play("menu", -6.0)
 	_prune()
 	if selected.is_empty():
 		return
@@ -337,11 +379,13 @@ func cmd_run_toggle() -> void:
 		u.running = run
 
 func cmd_halt() -> void:
+	sfx.play("menu", -6.0)
 	_prune()
 	for u: Unit in selected:
 		sim.order_halt(u)
 
 func cmd_fire_toggle() -> void:
+	sfx.play("menu", -6.0)
 	_prune()
 	if selected.is_empty():
 		return
@@ -366,7 +410,9 @@ func _unhandled_input(ev: InputEvent) -> void:
 			if mb.pressed:
 				rc_start = mb.position
 				rc_ground = rig.pick(mb.position)
+				rc_held = true
 			else:
+				rc_held = false
 				_issue_order(mb.position)
 	elif ev is InputEventKey and ev.pressed and not ev.echo:
 		var k := (ev as InputEventKey).keycode
@@ -428,25 +474,42 @@ func _issue_order(release: Vector2) -> void:
 	if enemy != null:
 		for u: Unit in selected:
 			sim.order_attack(u, enemy, u.running)
+		sfx.play("sword")
 		_flash(enemy.center)
 		return
 	if rc_ground == null:
 		return
 	var dest: Vector2 = rc_ground
-	var facing := Vector2.ZERO
-	if rc_start.distance_to(release) > 14.0:
-		var g2 = rig.pick(release)
-		if g2 != null and (g2 as Vector2).distance_to(dest) > 3.0:
-			facing = ((g2 as Vector2) - dest).normalized()
+	var facing := drag_facing(release)
+	sfx.play("march")
+	var slots := move_slots(dest)
+	for i in selected.size():
+		sim.order_move(selected[i], slots[i], facing, (selected[i] as Unit).running)
+	var lim := Cfg.CONTROL_HALF - 25.0
+	_flash(Vector2(clampf(dest.x, -lim, lim), clampf(dest.y, -lim, lim)))
+
+## Direção da frente dada arrastando o botão direito (ZERO se não houve arrasto).
+func drag_facing(release: Vector2) -> Vector2:
+	if rc_ground == null or rc_start.distance_to(release) <= 14.0:
+		return Vector2.ZERO
+	var g2 = rig.pick(release)
+	if g2 != null and (g2 as Vector2).distance_to(rc_ground) > 3.0:
+		return ((g2 as Vector2) - (rc_ground as Vector2)).normalized()
+	return Vector2.ZERO
+
+## Posição de destino de cada unidade selecionada (mesma ordem de `selected`) para uma
+## ordem de mover até `dest`, mantendo a disposição relativa das unidades.
+func move_slots(dest: Vector2) -> Array:
+	var out: Array = []
+	if selected.is_empty():
+		return out
 	var cen := Vector2.ZERO
 	for u: Unit in selected:
 		cen += u.center
 	cen /= selected.size()
 	for u: Unit in selected:
-		var off := (u.center - cen).limit_length(350.0)
-		sim.order_move(u, dest + off, facing, u.running)
-	var lim := Cfg.CONTROL_HALF - 25.0
-	_flash(Vector2(clampf(dest.x, -lim, lim), clampf(dest.y, -lim, lim)))
+		out.append(dest + (u.center - cen).limit_length(350.0))
+	return out
 
 func _flash(p: Vector2) -> void:
 	marker.position = Vector3(p.x, terrain.height(p.x, p.y) + 7.0, p.y)

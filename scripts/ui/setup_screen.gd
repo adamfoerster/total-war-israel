@@ -5,14 +5,18 @@ extends Control
 signal start_battle(army)
 
 const Cfg = preload("res://scripts/config.gd")
+const Sfx = preload("res://scripts/sfx.gd")
 
 var initial_army: Array = []
 var rows: Array = []          # [{type, men, general}]
 var list: VBoxContainer
 var summary: Label
 var add_btn: Button
+var sfx
 
 func _ready() -> void:
+	sfx = Sfx.new()
+	add_child(sfx)
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	var bg := ColorRect.new()
 	bg.color = Color(0.13, 0.11, 0.09)
@@ -70,6 +74,7 @@ func _ready() -> void:
 	_rebuild()
 
 func _add_row() -> void:
+	sfx.play("menu")
 	if rows.size() >= Cfg.MAX_CARDS:
 		return
 	rows.append({"type": Cfg.HEAVY, "men": 200, "general": rows.is_empty()})
@@ -121,11 +126,13 @@ func _rebuild() -> void:
 	_summary()
 
 func _set_general(r: Dictionary) -> void:
+	sfx.play("click")
 	for o: Dictionary in rows:
 		o.general = is_same(o, r)
 	_summary()
 
 func _remove(r: Dictionary) -> void:
+	sfx.play("menu")
 	if rows.size() <= 1:
 		return
 	for k in rows.size():
@@ -147,6 +154,7 @@ func _summary() -> void:
 	add_btn.disabled = rows.size() >= Cfg.MAX_CARDS
 
 func _go() -> void:
+	sfx.play("march")
 	# exatamente um general
 	var has := false
 	for r: Dictionary in rows:

@@ -20,6 +20,7 @@ var center := Vector2.ZERO
 var facing := Vector2(0, -1)
 var want_facing := Vector2.ZERO
 var dest_facing := Vector2.ZERO
+var arrived_at := -100.0   # tempo da simulação em que concluiu a última movimentação
 var files := 1
 var path := PackedVector2Array()
 var path_i := 0

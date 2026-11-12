@@ -196,13 +196,17 @@ func finalize() -> void:
 func _clamp_ctrl(p: Vector2) -> Vector2:
 	return Vector2(clampf(p.x, -CTRL, CTRL), clampf(p.y, -CTRL, CTRL))
 
+## Ponto onde a unidade de fato chegaria ao receber ordem de ir até p.
+func reachable(p: Vector2, u: Unit) -> Vector2:
+	return terrain.nearest_passable(_clamp_ctrl(p), u.type == Cfg.CHARIOT)
+
 func order_move(u: Unit, dest: Vector2, facing: Vector2, run: bool) -> void:
 	if u.state != 0:
 		return
 	u.target = null
 	u.running = run
 	u.dest_facing = facing
-	dest = terrain.nearest_passable(_clamp_ctrl(dest), u.type == Cfg.CHARIOT)
+	dest = reachable(dest, u)
 	u.path = terrain.find_path(u.center, dest, u.type == Cfg.CHARIOT)
 	u.path_i = 0
 
@@ -522,8 +526,10 @@ func _advance_anchor(u: Unit, dt: float, spd_mult: float) -> bool:
 			u.path_i += 1
 			if u.path_i >= u.path.size():
 				u.path = PackedVector2Array()
-				if u.target == null and u.dest_facing != Vector2.ZERO:
-					u.want_facing = u.dest_facing
+				if u.target == null:
+					u.arrived_at = time
+					if u.dest_facing != Vector2.ZERO:
+						u.want_facing = u.dest_facing
 		else:
 			u.center += dir * step
 			want = dir

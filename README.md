@@ -2,7 +2,7 @@
 
 Jogo de batalhas táticas em tempo real ambientado na Terra Prometida nos tempos do Antigo Testamento. Feito em Godot 4 e jogado no navegador.
 
-A versão 0.2.0 tem um único mapa, Jerusalém, construído a partir de dados reais de elevação, e uma batalha contra a IA.
+A versão 0.6.0 tem um único mapa, Jerusalém, construído a partir de dados reais de elevação, e uma batalha contra a IA.
 
 ## Como jogar
 
@@ -17,9 +17,9 @@ Perde o lado que ficar sem nenhuma unidade sob controle.
 | Ação | Controle |
 | --- | --- |
 | Selecionar unidade | Clique no card ou no estandarte dela no campo |
-| Selecionar várias | Ctrl ou Shift + clique no card ou no estandarte |
+| Selecionar várias | Ctrl + clique soma ou tira uma unidade; Shift + clique seleciona todos os cards entre a última unidade selecionada e a clicada |
 | Selecionar todas | Ctrl+A |
-| Mover | Botão direito no terreno (arraste para definir a direção da frente) |
+| Mover | Botão direito no terreno; arraste antes de soltar para definir a frente. Enquanto o botão está pressionado, cada unidade selecionada mostra um retângulo verde com o posto final dela (e uma seta verde com a direção, se houver arrasto). Depois da ordem, o destino de cada unidade a caminho fica marcado em branco. Ao concluir o movimento, uma seta amarela no chão mostra a frente por 5 s |
 | Atacar | Botão direito no estandarte inimigo |
 | Correr / andar | R |
 | Parar | H |
@@ -56,6 +56,18 @@ Uma unidade entra em pânico e foge quando a moral fica muito baixa, quando rest
 - Declives acima de 12° barram os carros.
 - Declives acima de 32° barram todos.
 - A área visível (4 × 4 km) é maior que a área controlável (2,4 × 2,4 km).
+
+## Sons
+
+Os efeitos sonoros (`assets/sounds/`) vêm do jogo de tabuleiro Promised Land e são tocados por `scripts/sfx.gd`:
+
+| Interação | Som |
+| --- | --- |
+| Selecionar unidade (card ou estandarte) e escolher o general | `select2` |
+| Botões do preparo, correr, parar e atirar à vontade | `menu-select` |
+| Iniciar a batalha e ordem de movimento | `march` |
+| Ordem de ataque e corpo a corpo em curso (mais alto com mais unidades em contato) | `sword` |
+| Fim da batalha | `win` ou `lose` |
 
 ## Como rodar
 

@@ -6,6 +6,8 @@ const Cfg = preload("res://scripts/config.gd")
 const Unit = preload("res://scripts/unit.gd")
 const UnitCard = preload("res://scripts/ui/unit_card.gd")
 
+const ARROW_SECS := 5.0       # quanto tempo a seta de frente fica visível
+
 var battle
 var banner_pos := {}          # Unit -> Vector2 (tela)
 var banners: Control
@@ -143,7 +145,88 @@ func _refresh() -> void:
 		btn_fire.text = "Atirar à vontade: %s (F)" % ("sim" if sel[0].fire_at_will else "não")
 	btn_pause.text = "Continuar (P)" if battle.paused else "Pausa (P)"
 
+## Seta no chão indicando a frente da unidade nos primeiros segundos após concluir a movimentação.
+func _draw_facing_arrows() -> void:
+	var now: float = battle.sim.time
+	for u: Unit in battle.sim.units:
+		if u.state != 0 or now - u.arrived_at > ARROW_SECS:
+			continue
+		var fade := clampf(ARROW_SECS - (now - u.arrived_at), 0.0, 1.0)
+		_draw_arrow(u.center, u.facing, u.brad + 30.0, Color(1, 0.85, 0.2, fade))
+	_draw_preview_arrow()
+
+## Prévia da frente enquanto o botão direito está pressionado e arrastado.
+func _draw_preview_arrow() -> void:
+	battle._prune()
+	var sel: Array = battle.selected
+	if sel.is_empty():
+		return
+	var held: bool = battle.rc_held and battle.rc_ground != null \
+		and battle._enemy_at(battle.rc_start, battle.rc_ground) == null
+	if held:
+		var dest: Vector2 = battle.rc_ground
+		var f: Vector2 = battle.drag_facing(battle.get_viewport().get_mouse_position())
+		var slots: Array = battle.move_slots(dest)
+		for i in sel.size():
+			var u: Unit = sel[i]
+			var p: Vector2 = battle.sim.reachable(slots[i], u)
+			_draw_slot(u, p, f if f != Vector2.ZERO else u.facing, Color(0.5, 1, 0.5, 0.95))
+		if f != Vector2.ZERO:
+			_draw_arrow(dest, f, 70.0, Color(0.5, 1, 0.5, 0.9))
+	else:
+		# destinos já ordenados das unidades selecionadas que ainda estão a caminho
+		for u: Unit in sel:
+			if u.target == null and not u.path.is_empty():
+				var fd: Vector2 = u.dest_facing if u.dest_facing != Vector2.ZERO else u.facing
+				_draw_slot(u, u.path[u.path.size() - 1], fd, Color(1, 1, 1, 0.8))
+
+## Retângulo no chão com o espaço que a unidade ocupará no destino, com marca da frente e sigla.
+func _draw_slot(u: Unit, c: Vector2, f: Vector2, col: Color) -> void:
+	var cam: Camera3D = battle.rig.cam
+	var sp: float = u.t.spacing
+	var hw: float = maxf(u.files * sp * 0.5, 3.0)
+	var hd: float = maxf(float(u.rows0) * sp * 0.5, 3.0)
+	var r := Vector2(-f.y, f.x)
+	var pts := PackedVector2Array()
+	for k in [[-1, -1], [1, -1], [1, 1], [-1, 1], [-1, -1]]:
+		var wp: Vector2 = c + r * (hw * k[0]) + f * (hd * k[1])
+		var w3 := Vector3(wp.x, battle.terrain.height(wp.x, wp.y) + 1.5, wp.y)
+		if cam.is_position_behind(w3):
+			return
+		pts.append(cam.unproject_position(w3))
+	var fill := col
+	fill.a = 0.18
+	banners.draw_colored_polygon(pts.slice(0, 4), fill)
+	banners.draw_polyline(pts, Color(0, 0, 0, col.a), 4.0)
+	banners.draw_polyline(pts, col, 2.0)
+	# lado da frente reforçado
+	banners.draw_line(pts[2], pts[3], col, 5.0)
+	var mid := (pts[0] + pts[1] + pts[2] + pts[3]) * 0.25
+	banners.draw_string(ThemeDB.fallback_font, mid + Vector2(-10, 5), u.t.short, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, col)
+
+func _draw_arrow(origin: Vector2, dir: Vector2, len_w: float, col: Color) -> void:
+	var cam: Camera3D = battle.rig.cam
+	var a := Vector3(origin.x, battle.terrain.height(origin.x, origin.y) + 1.5, origin.y)
+	var tp: Vector2 = origin + dir * len_w
+	var b := Vector3(tp.x, battle.terrain.height(tp.x, tp.y) + 1.5, tp.y)
+	if cam.is_position_behind(a) or cam.is_position_behind(b):
+		return
+	var sa := cam.unproject_position(a)
+	var sb := cam.unproject_position(b)
+	var d := sb - sa
+	if d.length() < 4.0:
+		return
+	d = d.normalized()
+	var n := Vector2(-d.y, d.x)
+	var edge := Color(0, 0, 0, col.a)
+	banners.draw_line(sa, sb - d * 8.0, edge, 6.0)
+	banners.draw_line(sa, sb - d * 8.0, col, 3.0)
+	var head := PackedVector2Array([sb, sb - d * 20.0 + n * 11.0, sb - d * 20.0 - n * 11.0])
+	banners.draw_colored_polygon(head, col)
+	banners.draw_polyline(PackedVector2Array([head[0], head[1], head[2], head[0]]), edge, 1.5)
+
 func _draw_banners() -> void:
+	_draw_facing_arrows()
 	var font := ThemeDB.fallback_font
 	for u: Unit in banner_pos:
 		var p: Vector2 = banner_pos[u]

@@ -4,6 +4,36 @@ Todas as mudanças relevantes deste projeto são registradas aqui.
 
 O formato segue o [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e o projeto usa [versionamento semântico](https://semver.org/lang/pt-BR/).
 
+## [0.6.0] - 2026-11-12
+
+### Alterado
+
+- Shift + clique em um card ou estandarte agora seleciona todas as unidades entre a última selecionada e a clicada; Ctrl + clique continua somando ou tirando uma unidade.
+
+## [0.5.0] - 2026-11-12
+
+### Adicionado
+
+- Efeitos sonoros reaproveitados do jogo de tabuleiro Promised Land: cliques de seleção e de menu, marcha ao ordenar movimento, espadas ao ordenar ataque e durante o corpo a corpo, e sons de vitória e derrota na tela de resultado.
+
+## [0.4.0] - 2026-11-12
+
+### Adicionado
+
+- Marcador individual no chão para cada unidade selecionada, mostrando o posto final dela ao dar uma ordem de movimento (verde durante a ordem, branco enquanto a unidade ainda está a caminho).
+
+## [0.3.0] - 2026-11-12
+
+### Adicionado
+
+- Seta verde de prévia da frente enquanto se arrasta o botão direito para dar uma ordem de movimento.
+
+## [0.2.1] - 2026-11-12
+
+### Adicionado
+
+- Seta amarela no chão indicando a frente da unidade por 5 s ao concluir uma movimentação.
+
 ## [0.2.0] - 2026-11-12
 
 ### Adicionado
