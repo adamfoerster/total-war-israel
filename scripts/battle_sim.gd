@@ -46,7 +46,8 @@ var record_deaths := false          # a cena liga: guarda onde cada soldado morr
 var death_pos := PackedVector2Array()   # visual: posição de cada morte; quem consome limpa
 var death_key := PackedInt32Array()     # lado * 10 + tipo, paralelo a death_pos
 var shots: Array = []            # visuais: [de, para, tempo de voo, tipo da unidade]
-var volleys: Array = []            # [t_impacto, alvo, acertos]
+var surrendered := -1                # lado que se rendeu (-1: ninguém)
+var volleys: Array = []            # [t_impacto, alvo, acertos, atirador]
 var losses := [0, 0]
 var fled := [0, 0]
 var awake_count := 0               # estatística: soldados processados no último tick
@@ -190,6 +191,77 @@ func deploy(side: int, origin: Vector2, facing: Vector2) -> void:
 			place_unit(u, c, facing)
 			x += uw
 		back += depth + 25.0
+
+## Faixa z (mín, máx) do setor de posicionamento do lado.
+func sector_z(side: int) -> Vector2:
+	return Vector2(Cfg.SECTOR_HALF, CTRL) if side == 0 else Vector2(-CTRL, -Cfg.SECTOR_HALF)
+
+## Posicionamento inicial automático do lado, dentro do seu setor.
+func deploy_side(side: int) -> void:
+	deploy(side, Cfg.DEPLOY_ORIGIN[side], Cfg.DEPLOY_FACING[side])
+	for u: Unit in units:
+		if u.side == side:
+			place_in_sector(u, u.center, u.facing)
+
+## Fase de posicionamento: põe a unidade direto em `p` (sem marchar), virada para `facing`
+## (ZERO mantém a frente atual), com a formação inteira dentro do setor do seu lado.
+## Se o centro cair em terreno intransponível ou a formação encostar em outra unidade do
+## mesmo lado (fora de `ignore`), procura o ponto livre mais próximo em anéis de até 300 m.
+func place_in_sector(u: Unit, p: Vector2, facing: Vector2, ignore: Array = []) -> void:
+	var f := facing if facing != Vector2.ZERO else u.facing
+	u.facing = f
+	u.path = PackedVector2Array()
+	u.target = null
+	u.want_facing = Vector2.ZERO
+	u.dest_facing = Vector2.ZERO
+	var best := _sector_clamp(u, p)
+	for ring in 21:
+		var rad := ring * 15.0
+		var tries := 1 if ring == 0 else 8 + ring * 2
+		var found := false
+		for k in tries:
+			var c := _sector_clamp(u, p + Vector2(rad, 0).rotated(TAU * k / tries))
+			if _deploy_spot_ok(u, c, ignore):
+				best = c
+				found = true
+				break
+		if found:
+			break
+	place_unit(u, best, f)
+
+## Centro limitado para a formação inteira (na frente atual de u) caber no setor.
+func _sector_clamp(u: Unit, p: Vector2) -> Vector2:
+	var f := u.facing
+	var sp: float = u.t.spacing
+	var hw := u.files * sp * 0.5
+	var hd := u.rows() * sp * 0.5
+	var r := Vector2(-f.y, f.x)
+	var ex := absf(r.x) * hw + absf(f.x) * hd
+	var ez := absf(r.y) * hw + absf(f.y) * hd
+	var zr := sector_z(u.side)
+	p.x = clampf(p.x, -CTRL + ex, CTRL - ex) if ex < CTRL else 0.0
+	p.y = clampf(p.y, zr.x + ez, zr.y - ez) if zr.x + ez < zr.y - ez else (zr.x + zr.y) * 0.5
+	return p
+
+## Todos os postos da formação em terreno transitável e formação sem encostar em outra
+## unidade do mesmo lado.
+func _deploy_spot_ok(u: Unit, c: Vector2, ignore: Array) -> bool:
+	for o: Unit in units:
+		if o == u or o.side != u.side or o.state != 0 or o.n == 0 or o in ignore:
+			continue
+		if _rects_touch_at(c, u, o, 2.0):
+			return false
+	var lim: float = terrain.limit(u.type == Cfg.CHARIOT)
+	var f := u.facing
+	var sp: float = u.t.spacing
+	var rstep := Vector2(-f.y, f.x) * sp
+	var fstep := f * sp
+	var rowbase := c - rstep * ((u.files - 1) * 0.5) + fstep * ((u.rows() - 1) * 0.5)
+	for i in range(u.start, u.start + u.n):
+		var q := rowbase + rstep * col_of[i] - fstep * row_of[i]
+		if terrain.slope_at(q.x, q.y) > lim:
+			return false
+	return true
 
 func finalize() -> void:
 	head.resize(GD * GD)
@@ -540,7 +612,7 @@ func _broadphase() -> void:
 		u.dense = false
 		u.qr = 2 if u.type == Cfg.CHARIOT else 1
 		if u.state == 0:
-			u.brad = _form_radius(u)
+			u.brad = _form_radius(u) + u.spill
 	for a in cnt:
 		var ua: Unit = units[a]
 		if ua.state == 2:
@@ -557,7 +629,8 @@ func _broadphase() -> void:
 				hit = true
 			elif ua.side != ub.side or ua.active or ub.active:
 				# formações só entram na grade quando os retângulos quase se tocam
-				hit = _rects_touch(ua, ub, 3.0)
+				# (a margem vale para os dois retângulos, então metade da folga somada basta)
+				hit = _rects_touch(ua, ub, 3.0 + 0.5 * (ua.spill + ub.spill))
 			if hit:
 				ua.dense = true
 				ub.dense = true
@@ -574,7 +647,7 @@ func _broadphase() -> void:
 			elif not want and u.in_grid:
 				_grid_remove(u)
 		elif u.state == 0:
-			u.safe = _terrain_safe(u, Cfg.SLOPE_CHARIOT if u.type == Cfg.CHARIOT else Cfg.SLOPE_IMPASS)
+			u.safe = _terrain_safe(u, terrain.limit(u.type == Cfg.CHARIOT))
 			if u.in_grid:
 				# todos nos postos, ninguém por perto, terreno livre: volta a ser rígida
 				if not u.dense and u.safe and u.rigid:
@@ -818,9 +891,14 @@ func _update_squeeze(u: Unit, dt: float) -> void:
 	var gap := 1e9
 	var off := 0.0
 	if not obs.is_empty():
-		var probes: Array = [-hd, 0.0, hd + sp]
-		if moving:
-			probes.append(hd + sp * 4.0 + 10.0)
+		# pontos de medição ao longo de toda a coluna, a cada SQUEEZE_PROBE_STEP m no máximo,
+		# para nenhuma formação rasa caber entre dois pontos sem ser vista
+		var front := hd + sp + (sp * 4.0 + 10.0 if moving else 0.0)
+		var span := front + hd
+		var steps := maxi(1, int(ceil(span / Cfg.SQUEEZE_PROBE_STEP)))
+		var probes: Array = []
+		for q in steps + 1:
+			probes.append(-hd + span * q / steps)
 		for k: float in probes:
 			var p := u.center + dir * k
 			var lft := _free_dist(p, -r, half, obs)
@@ -874,6 +952,7 @@ func _update_unit(u: Unit, dt: float) -> void:
 		# formação rígida longe de tudo: custo zero por soldado
 		u.contacts = 0
 		u.active = anchor_moved
+		u.spill = 0.0
 		return
 	var s := u.start
 	var f := u.facing
@@ -885,15 +964,16 @@ func _update_unit(u: Unit, dt: float) -> void:
 	var rowbase := u.center - rstep * ((files - 1) * 0.5) + fstep * ((rows - 1) * 0.5)
 	var maxstep: float = float(t.run) * spd_mult * dt * (1.6 if u.running else 1.0)
 	var ms2 := maxstep * maxstep
-	var lim := Cfg.SLOPE_CHARIOT if u.type == Cfg.CHARIOT else Cfg.SLOPE_IMPASS
+	var lim: float = terrain.limit(u.type == Cfg.CHARIOT)
 	var sl := slope
 	var any := false
 	var k := 0
 	if not u.in_grid:
-		# fora de formação e ainda fora da grade: espera a próxima varredura (<= 0,3 s)
-		u.contacts = 0
-		u.active = true
-		return
+		# saiu da formação rígida (morte, reforma, meia-volta): entra na grade já, para os
+		# soldados seguirem o centro. Esperar a próxima varredura os deixava parados enquanto
+		# o centro andava, e o desenho os puxava de volta (teleporte).
+		_grid_add(u)
+		_wake_all(u)
 	# na grade: colisão e combate, apenas para os soldados acordados
 	if anchor_moved and not u.all_awake:
 		_wake_all(u)
@@ -913,6 +993,7 @@ func _update_unit(u: Unit, dt: float) -> void:
 	var rigid_prev := u.rigid
 	var cb2 := col_of
 	var rb2 := row_of
+	var off2 := 0.0
 	awake_count += w.size()
 	for gi in w:
 		k = gi - s
@@ -923,6 +1004,8 @@ func _update_unit(u: Unit, dt: float) -> void:
 		var p := pos[gi]
 		var d := slot - p
 		var l2 := d.length_squared()
+		if l2 > off2:
+			off2 = l2
 		var at_slot := l2 < 0.0004
 		if (fl & 4) != 0 and at_slot and tm < cd[gi]:
 			ncontact += 1
@@ -1045,6 +1128,9 @@ func _update_unit(u: Unit, dt: float) -> void:
 		if best < 0:
 			nw.append(gi)
 	u.rigid = noff == 0 and ncontact == 0
+	# soldados fora do posto saem do retângulo da formação; a varredura alarga o teste
+	# de contato por essa folga, mais o que andam até a próxima varredura (3 ticks)
+	u.spill = sqrt(off2) + maxstep * 3.0
 	nw.append_array(u.wake)
 	u.wake = nw
 	if ncontact > 0 and prevc == 0 and u.running and anchor_moved:
@@ -1059,6 +1145,7 @@ func _update_unit(u: Unit, dt: float) -> void:
 
 func _attack(a: Unit, j: int) -> void:
 	var b: Unit = units[unit_of[j]]
+	b.attacked_by[a.id] = time
 	var av: float = float(a.t.atk) * a.str_mult
 	if a.charge_t > 0.0:
 		av += float(a.t.charge)
@@ -1169,7 +1256,7 @@ func _try_fire(u: Unit) -> void:
 	var dh: float = terrain.height(u.center.x, u.center.y) - terrain.height(tg.center.x, tg.center.y)
 	var hits: float = u.n * float(u.t.acc) * (1.2 - 0.5 * dist / maxf(float(u.t.range), 1.0))
 	hits *= (1.0 + clampf(dh * 0.004, -0.15, 0.25)) * (1.0 - float(tg.t.armor)) * (0.7 + 0.3 * u.str_mult)
-	volleys.append([time + flight, tg, hits])
+	volleys.append([time + flight, tg, hits, u])
 	shots.append([u.center, tg.center, flight, u.type])
 
 func _update_volleys() -> void:
@@ -1179,6 +1266,8 @@ func _update_volleys() -> void:
 		if time >= float(v[0]):
 			var tg: Unit = v[1]
 			var hits: float = v[2]
+			if tg.state != 2:
+				tg.attacked_by[(v[3] as Unit).id] = time
 			var cnt := int(hits)
 			if randf() < hits - cnt:
 				cnt += 1
@@ -1290,8 +1379,29 @@ func _start_rout(u: Unit) -> void:
 	messages.append(["%s entrou em pânico e foge!" % u.label, u.side])
 	events.append(["rout", u])
 	_shock(u, Cfg.SEE_ROUT_LOSS)
+	_credit_rout(u)
 	if u.is_general and u.general_alive:
 		_general_down(u, false)
+
+## Quem pôs u em pânico ganha moral: só as unidades sob controle que golpearam u ou
+## acertaram disparos nela nos últimos Cfg.ROUT_CREDIT_WINDOW s. Quem apenas marchava
+## até ela não conta. O ganho respeita o teto de moral da unidade.
+func _credit_rout(u: Unit) -> void:
+	for id: int in u.attacked_by:
+		if time - float(u.attacked_by[id]) > Cfg.ROUT_CREDIT_WINDOW:
+			continue
+		var a: Unit = units[id]
+		if a.state == 0:
+			a.morale = minf(a.morale + Cfg.ROUT_CREDIT_GAIN, _morale_cap(a))
+	u.attacked_by.clear()
+
+## Teto de moral: a base da unidade, mais 10 perto do general vivo e sob controle.
+func _morale_cap(u: Unit) -> float:
+	for g: Unit in units:
+		if g.side == u.side and g.is_general and g.general_alive and g.state == 0:
+			if g.center.distance_to(u.center) < Cfg.GENERAL_AURA:
+				return u.morale_base + 10.0
+	return u.morale_base
 
 ## Direção de fuga: para longe do inimigo e rumo à borda mais próxima, seguindo uma
 ## rota que contorna os declives proibidos para o tipo da unidade.
@@ -1338,7 +1448,7 @@ func _update_rout(u: Unit, dt: float) -> void:
 	u.rout_t += dt
 	var t := u.t
 	var step: float = float(t.run) * (1.0 - 0.3 * u.fatigue * 0.01) * dt
-	var lim := Cfg.SLOPE_CHARIOT if u.type == Cfg.CHARIOT else Cfg.SLOPE_IMPASS
+	var lim: float = terrain.limit(u.type == Cfg.CHARIOT)
 	var myr: float = t.radius
 	var fd := u.flee_dir
 	var s := u.start
@@ -1405,6 +1515,23 @@ func _update_rout(u: Unit, dt: float) -> void:
 	u.brad = sqrt(maxd2) + 4.0
 	u.vel = fd * (step / dt)
 	u.dirty = true
+
+## Força do lado: soma dos pontos (Cfg.TYPES[].power) dos modelos vivos nas unidades sob
+## controle. Unidades em fuga não contam.
+func power(side: int) -> int:
+	var p := 0
+	for u: Unit in units:
+		if u.side == side and u.state == 0:
+			p += u.n * int(u.t.power)
+	return p
+
+## O lado desiste: a vitória vai para o outro.
+func surrender(side: int) -> void:
+	if winner >= 0:
+		return
+	surrendered = side
+	winner = 1 - side
+	messages.append(["%s se %s!" % [Cfg.SIDE_NAMES[side], "rendeu" if side == 0 else "renderam"], side])
 
 func _check_victory() -> void:
 	if winner >= 0:

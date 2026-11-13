@@ -25,7 +25,11 @@ func update(dt: float) -> void:
 			mine.append(u)
 	if mine.is_empty():
 		return
-	var cnt := maxi(1, (mine.size() + 3) / 4)
+	# rende-se com menos de um terço da força do inimigo
+	if sim.power(side) < sim.power(1 - side) * Cfg.SURRENDER_RATIO:
+		sim.surrender(side)
+		return
+	var cnt :=maxi(1, (mine.size() + 3) / 4)
 	for k in cnt:
 		_idx = (_idx + 1) % mine.size()
 		_think(mine[_idx], mine)

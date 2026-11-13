@@ -49,11 +49,13 @@ var flank_t := 0.0
 var charge_t := 0.0
 var lost_acc := 0
 var kills := 0
+var attacked_by := {}   # id da unidade inimiga -> último tempo em que golpeou ou acertou disparos nesta
 
 var vel := Vector2.ZERO
 var dense := false
 var qr := 1
 var brad := 10.0
+var spill := 0.0   # quanto os soldados saem do retângulo da formação (fora do posto + passo até a próxima varredura)
 var active := false
 var settling := true
 var dirty := true

@@ -23,20 +23,33 @@ func new_sim(terrain) -> BattleSim:
 	return s
 
 func run() -> int:
+	# semente aleatória impressa; "--seed N" repete uma rodada exata
+	var sd := randi()
+	var args := OS.get_cmdline_user_args()
+	var k := args.find("--seed")
+	if k >= 0 and k + 1 < args.size():
+		sd = int(args[k + 1])
+	seed(sd)
+	print("semente: ", sd)
 	var terrain := TerrainData.new()
 	terrain.load_map()
 	print("terreno real: ", terrain.real_data, "  alt base ", terrain.base_alt, "  relevo ", terrain.hmax)
 	check(terrain.real_data, "heightmap real de Jerusalém carregado")
-	_test_fatigue(terrain)
-	_test_height(terrain)
-	_test_general(terrain)
-	_test_clamp(terrain)
-	_test_reform(terrain)
-	_test_rally(terrain)
-	_test_deaths(terrain)
-	_test_daylight()
-	_test_detour(terrain)
-	_test_squeeze(terrain)
+	if not "--so-batalha" in args:
+		_test_fatigue(terrain)
+		_test_height(terrain)
+		_test_general(terrain)
+		_test_clamp(terrain)
+		_test_reform(terrain)
+		_test_rally(terrain)
+		_test_deaths(terrain)
+		_test_daylight()
+		_test_detour(terrain)
+		_test_squeeze(terrain)
+		_test_rout_credit(terrain)
+		_test_surrender(terrain)
+		_test_slope_limits(terrain)
+	seed(sd)   # a batalha depende só da semente, com ou sem os testes anteriores
 	_test_battle(terrain)
 	print("FALHAS: ", fails)
 	return fails
@@ -248,6 +261,90 @@ func _test_detour(terrain) -> void:
 	s2.order_move(m, Vector2(-500, -900), Vector2(1, 0), false)
 	check(m.thru, "desvio grande demais: passa por entre as unidades")
 
+func _test_rout_credit(terrain) -> void:
+	print("[moral para quem pôs o inimigo em pânico]")
+	var s := new_sim(terrain)
+	var foe := s.add_unit(1, Cfg.LIGHT, 100, false)
+	var melee := s.add_unit(0, Cfg.HEAVY, 100, false)
+	var archer := s.add_unit(0, Cfg.ARCHER, 100, false)
+	var walker := s.add_unit(0, Cfg.LIGHT, 100, false)
+	var old := s.add_unit(0, Cfg.LIGHT, 100, false)
+	var foe2 := s.add_unit(1, Cfg.LIGHT, 100, false)
+	s.place_unit(foe2, Vector2(-500, -900), Vector2(0, 1))
+	s.place_unit(foe, Vector2(-900, -900), Vector2(0, 1))
+	s.place_unit(melee, Vector2(-900, -870), Vector2(0, -1))
+	s.place_unit(archer, Vector2(-900, -700), Vector2(0, -1))
+	s.place_unit(walker, Vector2(-800, -800), Vector2(0, -1))
+	s.place_unit(old, Vector2(-1000, -800), Vector2(0, -1))
+	s.finalize()
+	# golpe corpo a corpo e disparo que cai no alvo registram o atacante
+	s._attack(melee, foe.start)
+	s.volleys.append([s.time, foe, 0.0, archer])
+	s._update_volleys()
+	check(foe.attacked_by.has(melee.id) and foe.attacked_by.has(archer.id), "golpe e disparo registram o atacante")
+	s.order_attack(walker, foe, false)
+	foe.attacked_by[old.id] = s.time - Cfg.ROUT_CREDIT_WINDOW - 1.0
+	for u: Unit in [melee, archer, walker, old]:
+		u.morale = 30.0
+	s._start_rout(foe)
+	var after := 30.0 + Cfg.ROUT_CREDIT_GAIN
+	# _start_rout também tira SEE_ROUT_LOSS das unidades do lado de foe, não destas
+	check(is_equal_approx(melee.morale, after), "quem golpeava ganha moral (%.1f)" % melee.morale)
+	check(is_equal_approx(archer.morale, after), "quem acertava disparos ganha moral (%.1f)" % archer.morale)
+	check(is_equal_approx(walker.morale, 30.0), "quem só marchava até o alvo não ganha (%.1f)" % walker.morale)
+	check(is_equal_approx(old.morale, 30.0), "ataque antigo demais não conta (%.1f)" % old.morale)
+	melee.morale = melee.morale_base - 2.0
+	foe2.attacked_by[melee.id] = s.time
+	s._start_rout(foe2)
+	check(melee.morale <= melee.morale_base + 0.001, "o ganho respeita o teto de moral")
+
+func _test_slope_limits(terrain) -> void:
+	print("[declives máximos ajustáveis]")
+	var solid := func(g: AStarGrid2D) -> int:
+		var c := 0
+		for z in Cfg.NAV_N:
+			for x in Cfg.NAV_N:
+				if g.is_point_solid(Vector2i(x, z)):
+					c += 1
+		return c
+	var foot0: int = solid.call(terrain.nav_foot)
+	var car0: int = solid.call(terrain.nav_car)
+	terrain.set_limits(Cfg.SLOPE_IMPASS + 15.0, Cfg.SLOPE_CHARIOT + 10.0)
+	var foot1: int = solid.call(terrain.nav_foot)
+	var car1: int = solid.call(terrain.nav_car)
+	check(foot1 < foot0 and car1 < car0, "limites maiores liberam terreno (a pé %d -> %d, carros %d -> %d)" % [foot0, foot1, car0, car1])
+	check(terrain.limit(true) == Cfg.SLOPE_CHARIOT + 10.0 and terrain.limit(false) == Cfg.SLOPE_IMPASS + 15.0, "limit() devolve os novos valores")
+	terrain.set_limits(Cfg.SLOPE_IMPASS, Cfg.SLOPE_CHARIOT)
+	check(solid.call(terrain.nav_foot) == foot0 and solid.call(terrain.nav_car) == car0, "voltar aos limites padrão refaz as grades iguais")
+
+func _test_surrender(terrain) -> void:
+	print("[força e rendição]")
+	var s := new_sim(terrain)
+	var h := s.add_unit(0, Cfg.HEAVY, 100, true)     # 100 x 2 = 200
+	var c := s.add_unit(0, Cfg.CHARIOT, 20, false)   # 10 carros x 4 = 40
+	var l := s.add_unit(1, Cfg.LIGHT, 100, true)     # 100 x 1 = 100
+	s.place_unit(h, Vector2(-900, 600), Vector2(0, -1))
+	s.place_unit(c, Vector2(-700, 600), Vector2(0, -1))
+	s.place_unit(l, Vector2(-900, -600), Vector2(0, 1))
+	s.finalize()
+	check(s.power(0) == 240 and s.power(1) == 100, "força: 2 por pesada, 4 por carro, 1 por leve (%d x %d)" % [s.power(0), s.power(1)])
+	var ai1 := AI.new()
+	ai1.init(s, 1)
+	ai1.update(1.0)
+	check(s.winner < 0, "IA com mais de 1/3 da força não se rende")
+	for k in 30:
+		s.kill_model(l, l.start)
+	ai1.update(1.0)
+	check(s.winner == 0 and s.surrendered == 1, "IA com menos de 1/3 da força se rende (%d x %d)" % [s.power(0), s.power(1)])
+	var s2 := new_sim(terrain)
+	var a := s2.add_unit(0, Cfg.LIGHT, 100, true)
+	var b := s2.add_unit(1, Cfg.LIGHT, 100, true)
+	s2.place_unit(a, Vector2(-900, 600), Vector2(0, -1))
+	s2.place_unit(b, Vector2(-900, -600), Vector2(0, 1))
+	s2.finalize()
+	s2.surrender(0)
+	check(s2.winner == 1 and s2.surrendered == 0, "jogador se rende: vitória do inimigo")
+
 func _test_squeeze(terrain) -> void:
 	print("[estreitar a frente para passar por um vão]")
 	var s := new_sim(terrain)
@@ -360,6 +457,13 @@ func _overlap_count(s: BattleSim) -> Array:
 							var key2 := "mesma unidade" if ua == ub else ("aliados" if ua.side == ub.side else "inimigos")
 							key2 += " grade=%s/%s estado=%d/%d" % [ua.in_grid, ub.in_grid, ua.state, ub.state]
 							cats[key2] = int(cats.get(key2, 0)) + 1
+							if ua != ub and ua.state == 0 and ub.state == 0 and samples < 8:
+								samples += 1
+								for uu: Unit in [ua, ub]:
+									print("      amostra t=%d: %s tipo=%d formada=%s grade=%s rigid=%s contatos=%d fileiras=%d/%d marcha=%s centro=%s alvo=%s sq=%s ativo=%s" % [
+										int(s.time), uu.label, uu.type, uu.formed, uu.in_grid, uu.rigid, uu.contacts, uu.files, uu.files_want,
+										not uu.path.is_empty(), str(uu.center.round()), uu.target.label if uu.target != null else "-", str(uu.squeeze_vec), uu.active])
+								print("        d=%.2f pos=%s/%s (c%d,r%d)x(c%d,r%d)" % [d, str(s.pos[i].round()), str(s.pos[j].round()), s.col_of[i], s.row_of[i], s.col_of[j], s.row_of[j]])
 							if ua == ub and samples < 5:
 								samples += 1
 								print("      amostra: %s tipo=%d contatos=%d marcha=%s rigid=%s formada=%s grade=%s  (c%d,r%d) x (c%d,r%d) d=%.2f prof=%d/%d t=%d" % [
@@ -382,15 +486,31 @@ func _test_battle(terrain) -> void:
 		for k in comp.size():
 			var u := s.add_unit(side, comp[k], 300, k == 0)
 			u.label = "%s %d (%s)" % [u.t.name, k + 1, Cfg.SIDE_NAMES[side]]
-	s.deploy(0, Vector2(-450, -50), Vector2(0, -1))
-	s.deploy(1, Vector2(-450, -850), Vector2(0, 1))
+	s.deploy_side(0)
+	s.deploy_side(1)
+	var in_sector := true
+	for u: Unit in s.units:
+		var zr: Vector2 = s.sector_z(u.side)
+		if u.center.y < zr.x or u.center.y > zr.y:
+			in_sector = false
+	check(in_sector, "posicionamento inicial dentro do setor de cada lado")
+	# posicionar fora do setor (no meio do mapa) leva a formação inteira de volta à borda do setor
+	var u0: Unit = s.units[0]
+	var c0 := u0.center
+	s.place_in_sector(u0, Vector2(-450, -300), Vector2(0, -1))
+	var front_z := u0.center.y - u0.rows() * float(u0.t.spacing) * 0.5
+	check(front_z >= Cfg.SECTOR_HALF - 0.01, "posicionar fora do setor fica na borda do setor (frente z=%.1f)" % front_z)
+	s.place_in_sector(u0, c0, Vector2(0, -1))
 	s.finalize()
 	print("  soldados simulados: ", s.pos.size())
 	var ai0 := AI.new()
 	ai0.init(s, 0)
 	var ai1 := AI.new()
 	ai1.init(s, 1)
+	var ov0: Array = _overlap_count(s)
+	check(ov0[0] == 0, "posicionamento inicial sem unidades sobrepostas (%d pares)" % ov0[0])
 	var base := _violations(s)
+	check(base[0] == 0 and base[1] == 0, "posicionamento inicial sem soldados em declive proibido %s" % str(base))
 	print("  violações iniciais (carro, intransp., fora): ", base)
 	var worst_bad := 0
 	var worst_soft := 0
@@ -439,10 +559,16 @@ func _test_battle(terrain) -> void:
 			printed += 1
 	print("  fim em t=%ds, vencedor=%s, baixas=%s, fugiram=%s" % [int(s.time),
 		Cfg.SIDE_NAMES[s.winner] if s.winner >= 0 else "nenhum", str(s.losses), str(s.fled)])
+	if s.winner < 0:
+		for u: Unit in s.units:
+			if u.state == 0:
+				print("    resta: %s tipo=%d n=%d moral=%.0f centro=%s alvo=%s rota=%d contatos=%d ativo=%s declive=%.1f" % [u.label, u.type, u.n, u.morale,
+					str(u.center.round()), u.target.label if u.target != null else "-", u.path.size(), u.contacts, u.active,
+					s.terrain.slope_at(u.center.x, u.center.y)])
 	print("  tick médio %.2f ms, pior %.1f ms" % [t_total / 1000.0 / ticks, t_max / 1000.0])
 	print("  sobreposições fortes por categoria: ", cats)
 	check(s.winner >= 0, "batalha termina com um vencedor")
-	check(max_car <= base[0], "nenhum carro entrou em declive > 12 graus (max %d, inicial %d)" % [max_car, base[0]])
+	check(max_car <= base[0], "nenhum carro entrou em declive > %.0f graus (max %d, inicial %d)" % [Cfg.SLOPE_CHARIOT, max_car, base[0]])
 	check(max_imp <= base[1], "ninguém entrou em declive intransponível (max %d)" % max_imp)
 	check(max_out == 0, "unidades controladas ficaram dentro da área controlável")
 	check(worst_bad == 0, "nenhum par de soldados sob controle atravessado (sobreposição forte: %d, leve: %d)" % [worst_bad, worst_soft])

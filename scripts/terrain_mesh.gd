@@ -69,6 +69,100 @@ static func build(terrain) -> ArrayMesh:
 	mesh.surface_set_material(0, m)
 	return mesh
 
+## Camada de depuração do acesso: cobre o relevo com cores por nó do heightmap, conforme
+## os declives máximos atuais do terreno: vermelho onde nem soldados a pé passam, amarelo
+## onde só eles passam (carros não), verde onde todos passam.
+static func build_access(terrain) -> ArrayMesh:
+	var n := Cfg.HM_N
+	var verts := PackedVector3Array()
+	var cols := PackedColorArray()
+	verts.resize(n * n)
+	cols.resize(n * n)
+	var h: PackedFloat32Array = terrain.h
+	var sl: PackedFloat32Array = terrain.slope
+	var foot: float = terrain.lim_foot
+	var car: float = terrain.lim_car
+	var red := Color(0.95, 0.12, 0.1, 0.6)
+	var yellow := Color(1.0, 0.85, 0.1, 0.55)
+	var green := Color(0.15, 0.85, 0.2, 0.4)
+	for j in n:
+		var z := (j - 200) * Cfg.HM_CELL
+		for i in n:
+			var k := j * n + i
+			verts[k] = Vector3((i - 200) * Cfg.HM_CELL, h[k] + 0.4, z)
+			var s := sl[k]
+			cols[k] = red if s > foot else (yellow if s > car else green)
+	var idx := PackedInt32Array()
+	idx.resize((n - 1) * (n - 1) * 6)
+	var w := 0
+	for j in n - 1:
+		for i in n - 1:
+			var a := j * n + i
+			idx[w] = a
+			idx[w + 1] = a + 1
+			idx[w + 2] = a + n
+			idx[w + 3] = a + 1
+			idx[w + 4] = a + n + 1
+			idx[w + 5] = a + n
+			w += 6
+	var arr := []
+	arr.resize(Mesh.ARRAY_MAX)
+	arr[Mesh.ARRAY_VERTEX] = verts
+	arr[Mesh.ARRAY_COLOR] = cols
+	arr[Mesh.ARRAY_INDEX] = idx
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
+	var m := StandardMaterial3D.new()
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.vertex_color_use_as_albedo = true
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mesh.surface_set_material(0, m)
+	return mesh
+
+## Faixa translúcida sobre o relevo, de z0 a z1, na largura da área controlável, com uma
+## borda mais forte na linha `edge_z` (o limite do setor voltado para o centro do mapa).
+## Os vértices caem nos nós do heightmap (10 m), para a faixa acompanhar o chão sem afundar.
+static func build_sector(terrain, z0: float, z1: float, edge_z: float, col: Color) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var c := Cfg.CONTROL_HALF
+	var step := Cfg.HM_CELL
+	var nx := int(round(2.0 * c / step))
+	var nz := int(round((z1 - z0) / step))
+	var lift := 0.6
+	st.set_color(col)
+	for iz in nz:
+		var za := z0 + iz * step
+		var zb := za + step
+		for ix in nx:
+			var xa := -c + ix * step
+			var xb := xa + step
+			var v := [Vector3(xa, terrain.height(xa, za) + lift, za), Vector3(xb, terrain.height(xb, za) + lift, za),
+				Vector3(xb, terrain.height(xb, zb) + lift, zb), Vector3(xa, terrain.height(xa, zb) + lift, zb)]
+			for k: int in [0, 1, 2, 0, 2, 3]:
+				st.add_vertex(v[k])
+	# borda: faixa de 5 m de largura, opaca
+	var edge := Color(col.r, col.g, col.b, 0.9)
+	st.set_color(edge)
+	for ix in nx:
+		var xa := -c + ix * step
+		var xb := xa + step
+		var q := [Vector3(xa, terrain.height(xa, edge_z) + lift + 0.2, edge_z - 2.5),
+			Vector3(xb, terrain.height(xb, edge_z) + lift + 0.2, edge_z - 2.5),
+			Vector3(xb, terrain.height(xb, edge_z) + lift + 0.2, edge_z + 2.5),
+			Vector3(xa, terrain.height(xa, edge_z) + lift + 0.2, edge_z + 2.5)]
+		for k: int in [0, 1, 2, 0, 2, 3]:
+			st.add_vertex(q[k])
+	var mesh := st.commit()
+	var m := StandardMaterial3D.new()
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.vertex_color_use_as_albedo = true
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mesh.surface_set_material(0, m)
+	return mesh
+
 static func build_border(terrain) -> ArrayMesh:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)

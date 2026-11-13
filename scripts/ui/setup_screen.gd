@@ -1,5 +1,5 @@
 extends Control
-## Tela de preparo: monta o exército (até 20 cards, 100–300 homens cada) e
+## Tela de preparo: monta o exército (até 20 cards; homens por card conforme o tipo) e
 ## escolhe qual card leva o general e a hora do dia (posição do sol e sombras).
 
 signal start_battle(army, hour)
@@ -39,7 +39,7 @@ func _ready() -> void:
 	title.add_theme_font_size_override("font_size", 30)
 	vb.add_child(title)
 	var sub := Label.new()
-	sub.text = "Monte o exército de Israel: até %d unidades, de %d a %d homens cada. Marque qual unidade leva o general — se ele fugir ou morrer, a moral de todo o exército despenca. O exército filisteu espelha a sua composição e ataca pelo planalto ao norte." % [Cfg.MAX_CARDS, Cfg.MIN_MEN, Cfg.MAX_MEN]
+	sub.text = "Monte o exército de Israel: até %d unidades; o número de homens de cada uma depende do tipo. Marque qual unidade leva o general — se ele fugir ou morrer, a moral de todo o exército despenca. O exército filisteu espelha a sua composição e ataca pelo planalto ao norte." % Cfg.MAX_CARDS
 	sub.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	sub.add_theme_font_size_override("font_size", 14)
 	vb.add_child(sub)
@@ -92,7 +92,7 @@ func _ready() -> void:
 
 	if initial_army.is_empty():
 		for t: int in [0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4]:
-			rows.append({"type": t, "men": 200, "general": false})
+			rows.append({"type": t, "men": int(Cfg.TYPES[t].men_def), "general": false})
 		rows[0].general = true
 	else:
 		rows = initial_army.duplicate(true)
@@ -102,7 +102,7 @@ func _add_row() -> void:
 	sfx.play("menu")
 	if rows.size() >= Cfg.MAX_CARDS:
 		return
-	rows.append({"type": Cfg.HEAVY, "men": 200, "general": rows.is_empty()})
+	rows.append({"type": Cfg.HEAVY, "men": int(Cfg.TYPES[Cfg.HEAVY].men_def), "general": rows.is_empty()})
 	_rebuild()
 
 func _rebuild() -> void:
@@ -111,6 +111,9 @@ func _rebuild() -> void:
 	var group := ButtonGroup.new()
 	for k in rows.size():
 		var r: Dictionary = rows[k]
+		var tt: Dictionary = Cfg.TYPES[r.type]
+		# exército de uma partida anterior pode vir de outros limites
+		r.men = clampi(int(r.men), int(tt.men_min), int(tt.men_max))
 		var hb := HBoxContainer.new()
 		hb.add_theme_constant_override("separation", 10)
 		var num := Label.new()
@@ -122,12 +125,13 @@ func _rebuild() -> void:
 			opt.add_item(t.name)
 		opt.selected = r.type
 		opt.custom_minimum_size = Vector2(190, 0)
-		opt.item_selected.connect(func(i: int): r.type = i; _summary())
+		# trocar o tipo volta ao número padrão de homens do novo tipo
+		opt.item_selected.connect(func(i: int): _set_type(r, i))
 		hb.add_child(opt)
 		var sl := HSlider.new()
-		sl.min_value = Cfg.MIN_MEN
-		sl.max_value = Cfg.MAX_MEN
-		sl.step = 10
+		sl.min_value = tt.men_min
+		sl.max_value = tt.men_max
+		sl.step = tt.men_step
 		sl.value = r.men
 		sl.custom_minimum_size = Vector2(260, 0)
 		sl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
@@ -149,6 +153,11 @@ func _rebuild() -> void:
 		hb.add_child(del)
 		list.add_child(hb)
 	_summary()
+
+func _set_type(r: Dictionary, t: int) -> void:
+	r.type = t
+	r.men = int(Cfg.TYPES[t].men_def)
+	_rebuild.call_deferred()   # refaz o controle deslizante com os limites do novo tipo
 
 func _set_general(r: Dictionary) -> void:
 	sfx.play("click")

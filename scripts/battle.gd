@@ -14,6 +14,9 @@ const Models = preload("res://scripts/models.gd")
 const CameraRig = preload("res://scripts/camera_rig.gd")
 const SHOT_MAX := 480       # feixes simultâneos por tipo (flechas / pedras)
 const SHOTS_PER_VOLLEY := 10
+const PAIN_GAP := 1.6            # s médios entre gritos de dor da mesma unidade
+const VIEW_REFRESH_DIST := 3.0   # m andados até regravar as alturas dos soldados
+const VIEW_REFRESH_ANG := 0.08   # rad girados até regravar
 const BLOOD_GROW_T := 5.0   # segundos para a mancha chegar ao tamanho final
 const BLOOD_START := 0.15   # fração inicial do tamanho
 const Hud = preload("res://scripts/ui/battle_hud.gd")
@@ -25,7 +28,7 @@ var army: Array = []          # [{type, men, general}]
 var sun: DirectionalLight3D
 var env: Environment
 var day: Dictionary
-var hour := 10.0              # hora do dia escolhida no preparo
+var hour := Cfg.HOUR_DEFAULT  # hora do dia escolhida no preparo
 var terrain: TerrainData
 var sim: BattleSim
 var ai: AI
@@ -37,10 +40,15 @@ var bufs: Array = []          # PackedFloat32Array por unidade
 var last_facing: Array = []
 var view_c: Array = []        # pose (centro, frente) em que cada buffer foi gravado
 var view_f: Array = []
+var pain_n: Array = []        # homens vivos na última olhada, por unidade (gritos de dor)
+var pain_t: Array = []        # tempo até a unidade poder gritar de novo
 var selected: Array = []
 var sel_anchor = null   # última unidade selecionada sem Shift (início do intervalo)
 var ready_ok := false
 var paused := false
+var deploying := true          # fase de posicionamento: a simulação não corre e as ordens só posicionam
+var access_node: MeshInstance3D   # camada de depuração do acesso do terreno
+var sector_nodes: Array = []   # faixas dos setores no chão, visíveis só no posicionamento
 var speed := 1.0
 var acc := 0.0
 var since_tick := 0.0
@@ -74,6 +82,23 @@ func _ready() -> void:
 	_build_world()
 	cl.queue_free()
 	ready_ok = true
+
+## O jogador desiste: a vitória vai para os filisteus.
+func surrender() -> void:
+	if ended or sim.winner >= 0:
+		return
+	paused = false
+	sim.surrender(0)
+
+## Fim do posicionamento: some com os setores e a simulação começa a correr.
+func start_battle() -> void:
+	if not deploying:
+		return
+	deploying = false
+	for n: Node in sector_nodes:
+		n.queue_free()
+	sector_nodes.clear()
+	selected.clear()
 	sfx.play_any(["inicio-bom", "inicio-medio", "inicio-ruim"])
 
 ## Muda a hora do dia: posição e cor do sol, céu e luz ambiente.
@@ -95,6 +120,24 @@ func apply_settings() -> void:
 	var cast := GeometryInstance3D.SHADOW_CASTING_SETTING_ON if Settings.unit_shadows 		else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	for n: GeometryInstance3D in nodes:
 		n.cast_shadow = cast
+	_show_access(Settings.debug_access)
+
+## Depuração: mostra ou esconde a camada que pinta o terreno conforme quem consegue passar.
+func _show_access(on: bool) -> void:
+	if on and access_node == null:
+		access_node = MeshInstance3D.new()
+		access_node.mesh = TerrainMesh.build_access(terrain)
+		access_node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		add_child(access_node)
+	if access_node != null:
+		access_node.visible = on
+
+## Muda os declives máximos de soldados a pé e de carros (tela de configurações): refaz
+## as grades de navegação e, se estiver visível, a camada de acesso.
+func set_slope_limits(foot: float, car: float) -> void:
+	terrain.set_limits(foot, car)
+	if access_node != null:
+		access_node.mesh = TerrainMesh.build_access(terrain)
 
 func _build_world() -> void:
 	terrain = TerrainData.new()
@@ -131,9 +174,18 @@ func _build_world() -> void:
 			var key := "%d_%d" % [side, u.type]
 			counts[key] = int(counts.get(key, 0)) + 1
 			u.label = "%s %d (%s)" % [u.t.name, counts[key], Cfg.SIDE_NAMES[side]]
-	sim.deploy(0, Vector2(-450, -50), Vector2(0, -1))
-	sim.deploy(1, Vector2(-450, -850), Vector2(0, 1))
+	sim.deploy_side(0)
+	sim.deploy_side(1)
 	sim.finalize()
+	# setores de posicionamento: azul para Israel (sul), vermelho para os filisteus (norte)
+	var sh := Cfg.SECTOR_HALF
+	var ch := Cfg.CONTROL_HALF
+	for spec: Array in [[sh, ch, sh, Color(0.25, 0.5, 1.0, 0.16)], [-ch, -sh, -sh, Color(1.0, 0.3, 0.25, 0.13)]]:
+		var sm := MeshInstance3D.new()
+		sm.mesh = TerrainMesh.build_sector(terrain, spec[0], spec[1], spec[2], spec[3])
+		sm.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		add_child(sm)
+		sector_nodes.append(sm)
 	ai = AI.new()
 	ai.init(sim, 1)
 
@@ -163,6 +215,8 @@ func _build_world() -> void:
 		last_facing.append(Vector2.ZERO)
 		view_c.append(u.center)
 		view_f.append(u.facing)
+		pain_n.append(u.n)
+		pain_t.append(0.0)
 
 	# poças de sangue no chão (um disco achatado por morte)
 	var disc := CylinderMesh.new()
@@ -261,6 +315,8 @@ func _build_world() -> void:
 
 	rig = CameraRig.new()
 	rig.terrain = terrain
+	# começa olhando a linha de frente de Israel no seu setor
+	rig.target = (Cfg.DEPLOY_ORIGIN[0] as Vector2) - Vector2(0, 180)
 	add_child(rig)
 	sfx = Sfx.new()
 	add_child(sfx)
@@ -272,7 +328,7 @@ func _build_world() -> void:
 func _process(delta: float) -> void:
 	if not ready_ok:
 		return
-	if not paused and sim.winner < 0:
+	if not paused and not deploying and sim.winner < 0:
 		acc += delta * speed
 		var steps := 0
 		while acc >= Cfg.TICK and steps < 3:
@@ -300,6 +356,7 @@ func _process(delta: float) -> void:
 				(nodes[k] as Node3D).position = Vector3(u.vel.x, 0.0, u.vel.y) * (since_tick + (sim.tick_n - u.rout_stamp) * Cfg.TICK)
 	_update_arrows(delta * (0.0 if paused else speed))
 	_event_sounds()
+	_pain_sounds(delta * speed)
 	_combat_sound(delta)
 	if marker_t > 0.0:
 		marker_t -= delta
@@ -319,18 +376,41 @@ func _attack_sound() -> void:
 	var voice: String = own.get(u.type, "ataquem")
 	sfx.play(voice if randf() < 0.1 else "sword")
 
-## Vozes dos eventos da simulação (pânico das tropas do jogador).
+## Ponto da unidade no mundo, para os sons posicionados.
+func _unit_pos3(u: Unit) -> Vector3:
+	return Vector3(u.center.x, terrain.height(u.center.x, u.center.y) + 2.0, u.center.y)
+
+## Vozes dos eventos da simulação (pânico das tropas do jogador), vindas da unidade.
 func _event_sounds() -> void:
 	for e: Array in sim.events:
-		if e[0] == "rout" and (e[1] as Unit).side == 0:
-			if (e[1] as Unit).is_general:
-				sfx.play_any(["fuga-general", "fuga-general2"])
+		var u: Unit = e[1]
+		if e[0] == "rout" and u.side == 0:
+			var at := _unit_pos3(u)
+			if u.is_general:
+				sfx.play_any_at(["fuga-general", "fuga-general2"], at, 4.0)
 			else:
-				sfx.play_any(["fuga1", "fuga2"])
+				sfx.play_any_at(["fuga1", "fuga2"], at, 4.0)
 	sim.events.clear()
+
+## Gritos de dor nas unidades que perderam homens desde a última olhada. Cada unidade
+## grita no máximo a cada PAIN_GAP s; mais baixas de uma vez, grito mais alto.
+func _pain_sounds(delta: float) -> void:
+	for k in sim.units.size():
+		var u: Unit = sim.units[k]
+		var lost: int = pain_n[k] - u.n
+		pain_n[k] = u.n
+		pain_t[k] = float(pain_t[k]) - delta
+		if lost <= 0 or float(pain_t[k]) > 0.0 or paused:
+			continue
+		if u.state == 2 and u.n == 0 and lost > 3:
+			continue   # fugitivos que saíram do mapa: somem de uma vez, sem dor
+		pain_t[k] = randf_range(PAIN_GAP * 0.6, PAIN_GAP * 1.4)
+		sfx.play_any_at(Sfx.PAIN, _unit_pos3(u), -6.0 + minf(lost, 6) * 1.5, randf_range(0.9, 1.12))
 
 ## O general tenta parar a debandada (uma vez por minuto).
 func cmd_rally() -> void:
+	if deploying:
+		return
 	var g: Unit = null
 	for u: Unit in sim.units:
 		if u.side == 0 and u.is_general:
@@ -351,19 +431,21 @@ func _combat_sound(delta: float) -> void:
 	fight_t -= delta
 	if fight_t > 0.0:
 		return
-	var n := 0
+	var fighting: Array = []
 	for u: Unit in sim.units:
 		if u.state == 0 and u.contacts > 0:
-			n += 1
-	if n == 0:
+			fighting.append(u)
+	if fighting.is_empty():
 		return
-	sfx.play("choque%d" % (1 + randi() % 6), -18.0 + minf(n, 8) * 1.5)
-	fight_t = randf_range(0.35, 0.8)
+	# o choque sai de uma das unidades em combate, sorteada; com mais combates, mais choques
+	var u: Unit = fighting[randi() % fighting.size()]
+	sfx.play_at("choque%d" % (1 + randi() % 6), _unit_pos3(u), -6.0 + minf(u.contacts, 30) * 0.2, randf_range(0.93, 1.07))
+	fight_t = randf_range(0.35, 0.8) / sqrt(minf(fighting.size(), 9))
 
 func _sync_view(force: bool) -> void:
 	for k in nodes.size():
 		var u: Unit = sim.units[k]
-		if not (u.dirty or force):
+		if not (u.dirty or force or _view_stale(k, u)):
 			continue
 		u.dirty = false
 		var node: MultiMeshInstance3D = nodes[k]
@@ -387,15 +469,19 @@ func _sync_view(force: bool) -> void:
 		view_c[k] = u.center
 		view_f[k] = f
 		if u.state == 0:
-			# grava x/z do mundo com y = 0; a altura vem da transformação do nó
-			# (plano tangente ao terreno), ver _pose_xf
+			# grava x/z do mundo; a transformação do nó põe a unidade no plano tangente ao
+			# terreno (ver _pose_xf) e y guarda quanto o chão de cada soldado sobe ou desce
+			# em relação a esse plano, para ninguém afundar no relevo curvo
 			if u.formed:
 				sim.materialize(u)
+			var c0 := u.center
+			var h0 := terrain.height(c0.x, c0.y)
+			var g0: Vector2 = terrain.grad_at(c0)
 			var ps := sim.pos
 			for i in range(s, s + u.n):
 				var p := ps[i]
 				buf[o] = p.x
-				buf[o + 4] = 0.0
+				buf[o + 4] = terrain.height(p.x, p.y) - h0 - g0.dot(p - c0)
 				buf[o + 8] = p.y
 				o += 12
 			node.transform = _pose_xf(k, u, 0.0)
@@ -450,6 +536,15 @@ func _spawn_corpses() -> void:
 ## Transformação do nó de uma unidade sob controle: leva a pose em que o buffer foi
 ## gravado até a pose atual (movimento rígido da formação) e assenta os soldados no
 ## plano tangente ao terreno. Assim, unidades em marcha não regravam o buffer.
+## A unidade formada andou ou girou tanto desde a última gravação do buffer que as alturas
+## por soldado (relativas ao plano tangente) já não batem com o chão: regrava.
+func _view_stale(k: int, u: Unit) -> bool:
+	if u.state != 0 or u.n == 0:
+		return false
+	if u.center.distance_squared_to(view_c[k]) > VIEW_REFRESH_DIST * VIEW_REFRESH_DIST:
+		return true
+	return absf((view_f[k] as Vector2).angle_to(u.facing)) > VIEW_REFRESH_ANG
+
 func _pose_xf(k: int, u: Unit, ahead: float) -> Transform3D:
 	var c1 := u.center + u.vel * ahead
 	var c0: Vector2 = view_c[k]
@@ -468,7 +563,9 @@ func _spawn_shots() -> void:
 		var b: Vector2 = sh[1]
 		var a3 := Vector3(a.x, terrain.height(a.x, a.y) + 1.5, a.y)
 		var b3 := Vector3(b.x, terrain.height(b.x, b.y) + 1.0, b.y)
-		var lst: Array = stone_list if int(sh[3]) == Cfg.SLINGER else arrow_list
+		var sling := int(sh[3]) == Cfg.SLINGER
+		sfx.play_at("fundas" if sling else "flechas", a3, -2.0, randf_range(0.92, 1.08))
+		var lst: Array = stone_list if sling else arrow_list
 		for k in SHOTS_PER_VOLLEY:
 			if lst.size() >= SHOT_MAX:
 				break
@@ -627,6 +724,8 @@ func _unhandled_input(ev: InputEvent) -> void:
 			select_all()
 		elif k == KEY_ESCAPE:
 			selected.clear()
+		elif (k == KEY_ENTER or k == KEY_KP_ENTER) and deploying:
+			start_battle()
 
 ## Unidade própria cujo estandarte está sob o ponto da tela (retângulo 34 x 18).
 func _own_banner_at(screen: Vector2) -> Unit:
@@ -665,6 +764,9 @@ func _issue_order(release: Vector2) -> void:
 	_prune()
 	if selected.is_empty():
 		return
+	if deploying:
+		_deploy_order(release)
+		return
 	var enemy := _enemy_at(rc_start)
 	if enemy != null:
 		for u: Unit in selected:
@@ -686,6 +788,24 @@ func _issue_order(release: Vector2) -> void:
 		sim.order_move(selected[i], slots[i], facing, (selected[i] as Unit).running)
 	var lim := Cfg.CONTROL_HALF - 25.0
 	_flash(Vector2(clampf(dest.x, -lim, lim), clampf(dest.y, -lim, lim)))
+
+## Ordem durante o posicionamento: as unidades vão direto para o posto (sem marchar), com
+## a mesma frente, largura e disposição de uma ordem de mover, mas presas ao setor de Israel.
+func _deploy_order(release: Vector2) -> void:
+	if rc_ground == null:
+		return
+	var dest: Vector2 = drag_center(release)
+	var facing := drag_facing(release)
+	var width := drag_width(release) if facing != Vector2.ZERO else 0.0
+	var files: Array = plan_files(width) if width > 0.0 else []
+	var slots := move_slots(dest, facing, files)
+	# as selecionadas não se bloqueiam entre si: os postos de move_slots já não se sobrepõem
+	for i in selected.size():
+		if not files.is_empty():
+			sim.order_reform(selected[i], files[i])
+		sim.place_in_sector(selected[i], slots[i], facing, selected)
+	_sync_view(false)
+	sfx.play("menu", -6.0)
 
 ## Frente dada arrastando o botão direito: perpendicular à linha arrastada, de modo que,
 ## arrastando da esquerda para a direita, as unidades olhem para "cima" (ZERO se não houve arrasto).

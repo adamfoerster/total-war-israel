@@ -4,6 +4,35 @@ Todas as mudanças relevantes deste projeto são registradas aqui.
 
 O formato segue o [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e o projeto usa [versionamento semântico](https://semver.org/lang/pt-BR/).
 
+## [0.18.0] - 2026-11-13
+
+### Adicionado
+
+- Depuração do terreno na tela de configurações: camada que pinta o relevo de vermelho (ninguém passa), amarelo (só a pé) e verde (todos), e controles para mudar durante a partida o declive máximo de soldados a pé e de carros.
+- Rendição: botão "Render-se" (com confirmação) para o jogador desistir e dar a vitória ao inimigo; o computador se rende quando a força dele cai abaixo de um terço da do jogador.
+- Barra de força no alto do HUD com a força atual de cada lado (1 ponto por soldado de infantaria leve ou fundeiro, 2 por infantaria pesada ou arqueiro, 4 por carro de guerra) e a marca do limite de rendição.
+- Fase de posicionamento antes da batalha: a área controlável é dividida em 3 setores (faixas norte, centro e sul); Israel posiciona as unidades no setor sul, sem o tempo correr, e os filisteus começam no setor norte. A batalha começa com o botão "Iniciar batalha" ou Enter.
+- Unidades estreitam a frente para passar por vãos entre outras unidades (soldados que cabem no vão menos um) e voltam à largura original depois de passar.
+- Gritos de dor (12 gravações de 4 vozes, de "Male Grunt/Yelling sounds", HaelDB, OpenGameArt, CC0) sorteados quando uma unidade perde homens.
+- Sons de flechas e de fundas a cada volley, sintetizados por `tools/gen_sounds.js`.
+- Unidades que atacavam um inimigo (golpes corpo a corpo ou disparos acertados nos últimos 6 s) ganham 15 de moral quando ele entra em pânico; quem só marchava até ele não ganha.
+- Sons posicionados: dor, disparos, choques do combate e vozes de fuga saem da unidade no mapa, com lado (esquerda/direita) relativo à câmera e volume que cai com a distância.
+
+### Alterado
+
+- Hora do dia padrão passou de 10:00 para 6:00.
+- Os exércitos começam mais afastados do centro, cada um no seu setor (Israel a partir de z = 480, os filisteus a partir de z = -480).
+- Tamanho das unidades por tipo na tela de preparo (padrão / máximo): infantaria pesada 70 / 100, infantaria leve 100 / 160, arqueiros e fundeiros 60 / 100, carros de guerra 20 / 50. Antes, todos iam de 100 a 300 homens. Trocar o tipo volta ao padrão do novo tipo.
+- Flechas desenhadas como feixes de 4 hastes finas; fundeiros lançam pedras (10 pontos cinzas por feixe) em vez de flechas, e cada volley mostra mais projéteis.
+- A mancha de sangue cresce ao longo de 5 s depois da morte do soldado.
+- Declive máximo dos carros passou de 12° para 15°, e o de todos (a pé) de 32° para 25°. Com 12°, a navegação dos carros ficava dividida em bolsões isolados (o maior com 203 células de 20 m), e carros posicionados num deles nunca alcançavam o inimigo, deixando batalhas sem fim.
+
+### Corrigido
+
+- Soldados afundados no terreno nas pontas da formação em relevo acidentado: cada soldado agora acompanha a altura do chão sob ele, e não só o plano inclinado no centro da unidade.
+- Soldados que saltavam dentro da unidade quando ela perdia homens em marcha: a unidade entra na grade no mesmo tick em que sai da formação rígida, em vez de esperar a próxima varredura com os soldados parados.
+- Soldados de uma unidade atravessados nos de uma unidade aliada parada (por exemplo, carros estreitados para passar num vão): a varredura que põe as formações na grade agora alarga o teste de contato pelo quanto os soldados estão fora do posto, e a formação parada entra na grade antes de ser alcançada.
+
 ## [0.17.1] - 2026-11-12
 
 ### Adicionado

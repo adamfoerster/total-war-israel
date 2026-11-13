@@ -9,6 +9,10 @@ const Settings = preload("res://scripts/settings.gd")
 const Daylight = preload("res://scripts/daylight.gd")
 
 const ARROW_SECS := 5.0       # quanto tempo a seta de frente fica visível
+const POWER_W := 420.0        # barra de força
+const POWER_H := 22.0
+const COL_ISRAEL := Color(0.22, 0.42, 0.95)
+const COL_PHIL := Color(0.85, 0.2, 0.18)
 
 var battle
 var banner_pos := {}          # Unit -> Vector2 (tela)
@@ -27,6 +31,9 @@ var btn_pause: Button
 var result: PanelContainer
 var fps_label: Label
 var settings_panel: PanelContainer
+var deploy_panel: PanelContainer
+var power_bar: Control
+var surrender_dlg: ConfirmationDialog
 var _t := 0.0
 
 func _ready() -> void:
@@ -57,6 +64,26 @@ func _ready() -> void:
 	fps_label.visible = Settings.show_fps
 	add_child(fps_label)
 	_build_settings()
+	_build_deploy()
+
+	# barra de força: azul (Israel) contra vermelho (filisteus), na proporção da força atual
+	power_bar = Control.new()
+	power_bar.set_anchors_and_offsets_preset(Control.PRESET_CENTER_TOP)
+	power_bar.offset_left = -POWER_W * 0.5
+	power_bar.offset_right = POWER_W * 0.5
+	power_bar.offset_top = 8
+	power_bar.offset_bottom = 8 + POWER_H
+	power_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	power_bar.draw.connect(_draw_power)
+	add_child(power_bar)
+
+	surrender_dlg = ConfirmationDialog.new()
+	surrender_dlg.title = "Render-se"
+	surrender_dlg.dialog_text = "Desistir da batalha e conceder a vitória aos filisteus?"
+	surrender_dlg.ok_button_text = "Render-se"
+	surrender_dlg.cancel_button_text = "Continuar lutando"
+	surrender_dlg.confirmed.connect(battle.surrender)
+	add_child(surrender_dlg)
 
 	feed_panel = PanelContainer.new()
 	feed_panel.position = Vector2(10, 52)
@@ -90,6 +117,7 @@ func _ready() -> void:
 	_btn(row, "Selecionar todos", battle.select_all)
 	btn_pause = _btn(row, "Pausa (P)", func(): battle.paused = not battle.paused)
 	_btn(row, "Velocidade", _cycle_speed)
+	_btn(row, "Render-se", func(): surrender_dlg.popup_centered())
 	_btn(row, "Abandonar", battle.leave)
 
 	var flow := HFlowContainer.new()
@@ -104,6 +132,62 @@ func _ready() -> void:
 		flow.add_child(c)
 		cards.append(c)
 	_refresh()
+
+## Barra de força: a parte azul é a fração de Israel na força total atual, a vermelha a dos
+## filisteus; os números são os pontos de cada lado.
+func _draw_power() -> void:
+	var sim = battle.sim
+	var a: int = sim.power(0)
+	var b: int = sim.power(1)
+	var w := POWER_W
+	var h := POWER_H
+	power_bar.draw_rect(Rect2(-2, -2, w + 4, h + 4), Color(0, 0, 0, 0.6))
+	var fa := 0.5 if a + b == 0 else float(a) / float(a + b)
+	power_bar.draw_rect(Rect2(0, 0, w * fa, h), COL_ISRAEL)
+	power_bar.draw_rect(Rect2(w * fa, 0, w * (1.0 - fa), h), COL_PHIL)
+	# marca do limite de rendição da IA: filisteus abaixo de 1/3 da força de Israel
+	var fs := 1.0 / (1.0 + Cfg.SURRENDER_RATIO)
+	power_bar.draw_line(Vector2(w * fs, -3), Vector2(w * fs, h + 3), Color(1, 1, 1, 0.8), 2.0)
+	var font := ThemeDB.fallback_font
+	var fsz := 14
+	var y := h * 0.5 + fsz * 0.35
+	power_bar.draw_string_outline(font, Vector2(6, y), "Israel %d" % a, HORIZONTAL_ALIGNMENT_LEFT, -1, fsz, 3, Color.BLACK)
+	power_bar.draw_string(font, Vector2(6, y), "Israel %d" % a, HORIZONTAL_ALIGNMENT_LEFT, -1, fsz, Color.WHITE)
+	var rt := "%d Filisteus" % b
+	power_bar.draw_string_outline(font, Vector2(0, y), rt, HORIZONTAL_ALIGNMENT_RIGHT, w - 6, fsz, 3, Color.BLACK)
+	power_bar.draw_string(font, Vector2(0, y), rt, HORIZONTAL_ALIGNMENT_RIGHT, w - 6, fsz, Color.WHITE)
+
+## Aviso da fase de posicionamento, no alto da tela, com o botão de iniciar a batalha.
+func _build_deploy() -> void:
+	deploy_panel = PanelContainer.new()
+	deploy_panel.set_anchors_and_offsets_preset(Control.PRESET_CENTER_TOP)
+	deploy_panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	deploy_panel.offset_top = 48
+	var bg := StyleBoxFlat.new()
+	bg.bg_color = Color(0.08, 0.1, 0.18, 0.85)
+	bg.set_content_margin_all(10)
+	bg.set_corner_radius_all(4)
+	deploy_panel.add_theme_stylebox_override("panel", bg)
+	add_child(deploy_panel)
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 8)
+	deploy_panel.add_child(vb)
+	var title := Label.new()
+	title.text = "Posicionamento"
+	title.add_theme_font_size_override("font_size", 20)
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(title)
+	var tip := Label.new()
+	tip.text = "Posicione suas unidades na faixa azul (setor sul): selecione e use o botão direito.\nArraste para escolher a frente e a largura da linha. Os filisteus se posicionam na faixa vermelha."
+	tip.add_theme_font_size_override("font_size", 14)
+	tip.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(tip)
+	var go := Button.new()
+	go.text = "  Iniciar batalha (Enter)  "
+	go.add_theme_font_size_override("font_size", 18)
+	go.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	go.pressed.connect(battle.start_battle)
+	vb.add_child(go)
 
 ## Tela de configurações, mostrada enquanto o jogo está pausado.
 func _build_settings() -> void:
@@ -155,12 +239,59 @@ func _build_settings() -> void:
 	cb_un.toggled.connect(func(on: bool): Settings.unit_shadows = on; _changed())
 	cb_fps.toggled.connect(func(on: bool): Settings.show_fps = on; fps_label.visible = on; _changed())
 	sync.call()
+	_build_access_debug(vb)
 	var resume := Button.new()
 	resume.text = "Continuar (P)"
 	resume.focus_mode = Control.FOCUS_NONE
 	resume.pressed.connect(func(): battle.paused = false)
 	vb.add_child(resume)
 	add_child(settings_panel)
+
+## Depuração do acesso do terreno: liga a camada de cores e ajusta os declives máximos.
+## As grades de navegação são refeitas 0,3 s depois do último movimento do controle.
+func _build_access_debug(vb: VBoxContainer) -> void:
+	vb.add_child(HSeparator.new())
+	var cb := _check(vb, "Depuração: pintar acesso do terreno (vermelho: ninguém passa; amarelo: só a pé; verde: todos)", Settings.debug_access)
+	cb.toggled.connect(func(on: bool): Settings.debug_access = on; _changed())
+	var t: Object = battle.terrain
+	var apply := Timer.new()
+	apply.one_shot = true
+	apply.wait_time = 0.3
+	add_child(apply)
+	var foot := _slope_slider(vb, "Declive máximo a pé", t.lim_foot)
+	var car := _slope_slider(vb, "Declive máximo dos carros", t.lim_car)
+	apply.timeout.connect(func(): battle.set_slope_limits(foot.value, car.value))
+	foot.value_changed.connect(func(v: float):
+		if car.value > v:
+			car.value = v   # carros nunca vencem mais declive que soldados a pé
+		apply.start())
+	car.value_changed.connect(func(v: float):
+		if v > foot.value:
+			car.value = foot.value
+		apply.start())
+
+func _slope_slider(vb: VBoxContainer, text: String, v: float) -> HSlider:
+	var hr := HBoxContainer.new()
+	hr.add_theme_constant_override("separation", 10)
+	vb.add_child(hr)
+	var l := Label.new()
+	l.text = text
+	l.custom_minimum_size = Vector2(190, 0)
+	hr.add_child(l)
+	var s := HSlider.new()
+	s.min_value = 2.0
+	s.max_value = 60.0
+	s.step = 1.0
+	s.value = v
+	s.custom_minimum_size = Vector2(200, 0)
+	s.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	s.focus_mode = Control.FOCUS_NONE
+	hr.add_child(s)
+	var vl := Label.new()
+	vl.text = "%d°" % int(v)
+	hr.add_child(vl)
+	s.value_changed.connect(func(x: float): vl.text = "%d°" % int(x))
+	return s
 
 func _check(parent: Node, text: String, on: bool) -> CheckBox:
 	var c := CheckBox.new()
@@ -202,6 +333,7 @@ func _process(delta: float) -> void:
 		banner_pos[u] = cam.unproject_position(w)
 	banners.queue_redraw()
 	settings_panel.visible = battle.paused and not battle.ended
+	deploy_panel.visible = battle.deploying and not battle.paused
 	_t += delta
 	if _t >= 0.25:
 		_t = 0.0
@@ -213,9 +345,10 @@ func _refresh() -> void:
 		c.refresh(c.unit in battle.selected)
 	info.text = "Israel: %d unidades, %d homens      Filisteus: %d unidades, %d homens\n%s   x%d   tick %.1f ms" % [
 		sim.controlled(0), sim.men_alive(0), sim.controlled(1), sim.men_alive(1),
-		"PAUSADO" if battle.paused else "Tempo %d:%02d" % [int(sim.time) / 60, int(sim.time) % 60],
+		"PAUSADO" if battle.paused else ("POSICIONAMENTO" if battle.deploying else "Tempo %d:%02d" % [int(sim.time) / 60, int(sim.time) % 60]),
 		int(battle.speed), battle.tick_ms]
 	fps_label.text = "%d FPS" % Engine.get_frames_per_second()
+	power_bar.queue_redraw()
 	while feed_seen < sim.messages.size():
 		var m: Array = sim.messages[feed_seen]
 		feed_lines.append([str(m[0]), Time.get_ticks_msec() + int(FEED_SECS * 1000.0)])
@@ -235,7 +368,7 @@ func _refresh() -> void:
 	for u: Unit in sim.units:
 		if u.side == 0 and u.is_general and u.general_alive and u.state == 0:
 			gen = u
-	btn_rally.disabled = gen == null
+	btn_rally.disabled = gen == null or battle.deploying
 	if gen != null:
 		var wait := int(ceil(gen.rally_ready - sim.time))
 		btn_rally.text = "Reunir (G)" if wait <= 0 else "Reunir (%d s)" % wait
@@ -472,8 +605,15 @@ func show_result() -> void:
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vb.add_child(title)
 	var body := Label.new()
-	body.text = "%s não tem mais nenhuma unidade sob controle.\n\nIsrael — mortos: %d, fugiram do campo: %d\nFilisteus — mortos: %d, fugiram do campo: %d\nDuração: %d:%02d" % [
-		Cfg.SIDE_NAMES[1 - sim.winner], sim.losses[0], sim.fled[0], sim.losses[1], sim.fled[1],
+	var why: String
+	if sim.surrendered == 0:
+		why = "Israel se rendeu."
+	elif sim.surrendered == 1:
+		why = "Os filisteus se renderam: restava a eles menos de um terço da força de Israel."
+	else:
+		why = "%s não tem mais nenhuma unidade sob controle." % Cfg.SIDE_NAMES[1 - sim.winner]
+	body.text = "%s\n\nIsrael — mortos: %d, fugiram do campo: %d\nFilisteus — mortos: %d, fugiram do campo: %d\nDuração: %d:%02d" % [
+		why, sim.losses[0], sim.fled[0], sim.losses[1], sim.fled[1],
 		int(sim.time) / 60, int(sim.time) % 60]
 	body.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vb.add_child(body)

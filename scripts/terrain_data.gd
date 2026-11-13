@@ -15,6 +15,10 @@ var base_alt := 0.0
 var real_data := false
 var nav_foot := AStarGrid2D.new()
 var nav_car := AStarGrid2D.new()
+# declive máximo (graus) que soldados a pé e carros vencem; começam nos valores do
+# Cfg e podem mudar durante a partida (tela de configurações), ver set_limits
+var lim_foot := Cfg.SLOPE_IMPASS
+var lim_car := Cfg.SLOPE_CHARIOT
 
 func load_map() -> void:
 	var path := "res://assets/jerusalem_height.res"
@@ -49,8 +53,21 @@ func load_map() -> void:
 			gx[k] = a
 			gz[k] = b
 			slope[k] = rad_to_deg(atan(sqrt(a * a + b * b)))
-	_build_nav(nav_foot, Cfg.SLOPE_IMPASS, 0)
-	_build_nav(nav_car, Cfg.SLOPE_CHARIOT, 3)
+	_build_nav(nav_foot, lim_foot, 0)
+	_build_nav(nav_car, lim_car, 3)
+
+## Declive máximo de quem é carro (true) ou soldado a pé (false).
+func limit(chariot: bool) -> float:
+	return lim_car if chariot else lim_foot
+
+## Muda os declives máximos e refaz as grades de navegação que mudaram.
+func set_limits(foot: float, car: float) -> void:
+	if foot != lim_foot:
+		lim_foot = foot
+		_build_nav(nav_foot, lim_foot, 0)
+	if car != lim_car:
+		lim_car = car
+		_build_nav(nav_car, lim_car, 3)
 
 func _fallback() -> void:
 	# Relevo sintético, usado apenas se o heightmap real não estiver presente.
@@ -80,9 +97,8 @@ func _build_nav(g: AStarGrid2D, lim: float, margin: int) -> void:
 				for a in range(maxi(cx * 2 - margin, 0), mini(cx * 2 + 3 + margin, N)):
 					s = maxf(s, slope[b * N + a])
 			var id := Vector2i(cx, cz)
-			if s > lim:
-				g.set_point_solid(id, true)
-			else:
+			g.set_point_solid(id, s > lim)   # explícito: a grade pode estar sendo refeita
+			if s <= lim:
 				g.set_point_weight_scale(id, 1.0 + s / 10.0)
 
 func height(x: float, z: float) -> float:
