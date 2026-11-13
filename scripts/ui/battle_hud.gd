@@ -557,6 +557,10 @@ func _draw_arrow(origin: Vector2, dir: Vector2, len_w: float, col: Color) -> voi
 
 func _draw_banners() -> void:
 	_draw_facing_arrows()
+	var box: Rect2 = battle.select_box()
+	if box.size != Vector2.ZERO:
+		banners.draw_rect(box, Color(1, 0.85, 0.2, 0.12))
+		banners.draw_rect(box, Color(1, 0.85, 0.2, 0.9), false, 1.5)
 	var font := ThemeDB.fallback_font
 	var hover: Unit = null
 	if not battle.selected.is_empty() and not battle.ended:
@@ -612,8 +616,13 @@ func show_result() -> void:
 		why = "Os filisteus se renderam: restava a eles menos de um terço da força de Israel."
 	else:
 		why = "%s não tem mais nenhuma unidade sob controle." % Cfg.SIDE_NAMES[1 - sim.winner]
-	body.text = "%s\n\nIsrael — mortos: %d, fugiram do campo: %d\nFilisteus — mortos: %d, fugiram do campo: %d\nDuração: %d:%02d" % [
-		why, sim.losses[0], sim.fled[0], sim.losses[1], sim.fled[1],
+	# unidades em fuga no momento do fim da partida
+	var routing := [0, 0]
+	for u: Unit in sim.units:
+		if u.state == 1:
+			routing[u.side] += 1
+	body.text = "%s\n\nIsrael — mortos: %d, fugiram: %d\nFilisteus — mortos: %d, fugiram: %d\nDuração: %d:%02d" % [
+		why, sim.losses[0], routing[0], sim.losses[1], routing[1],
 		int(sim.time) / 60, int(sim.time) % 60]
 	body.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vb.add_child(body)

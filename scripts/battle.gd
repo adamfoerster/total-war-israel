@@ -56,6 +56,9 @@ var tick_ms := 0.0
 var rc_start := Vector2.ZERO
 var rc_ground = null
 var rc_held := false   # botão direito pressionado (ordem em andamento)
+var lc_held := false   # botão esquerdo pressionado no mapa (clique ou retângulo de seleção)
+var lc_start := Vector2.ZERO
+const BOX_MIN := 6.0   # px arrastados até o clique virar retângulo de seleção
 var marker: MeshInstance3D
 var marker_t := 0.0
 var arrows: MultiMeshInstance3D
@@ -697,9 +700,8 @@ func _unhandled_input(ev: InputEvent) -> void:
 		elif mb.button_index == MOUSE_BUTTON_WHEEL_DOWN and mb.pressed:
 			rig.zoom(1.14)
 		elif mb.button_index == MOUSE_BUTTON_LEFT and mb.pressed:
-			var own := _own_banner_at(mb.position)
-			if own != null:
-				select_card(own, mb.shift_pressed or mb.ctrl_pressed)
+			lc_held = true
+			lc_start = mb.position
 		elif mb.button_index == MOUSE_BUTTON_RIGHT:
 			if mb.pressed:
 				rc_start = mb.position
@@ -726,6 +728,44 @@ func _unhandled_input(ev: InputEvent) -> void:
 			selected.clear()
 		elif (k == KEY_ENTER or k == KEY_KP_ENTER) and deploying:
 			start_battle()
+
+## O botão esquerdo é solto aqui (e não em _unhandled_input) para que o retângulo de
+## seleção termine mesmo que o mouse seja solto sobre a interface.
+func _input(ev: InputEvent) -> void:
+	if not lc_held or not (ev is InputEventMouseButton):
+		return
+	var mb := ev as InputEventMouseButton
+	if mb.button_index != MOUSE_BUTTON_LEFT or mb.pressed:
+		return
+	var box := select_box()
+	lc_held = false
+	if not ready_ok or ended:
+		return
+	var add := mb.shift_pressed or mb.ctrl_pressed
+	if box.size == Vector2.ZERO:
+		var own := _own_banner_at(mb.position)
+		if own != null:
+			select_card(own, add)
+		return
+	if not add:
+		selected.clear()
+	for u: Unit in sim.units:
+		if u.side != 0 or u.state != 0 or u in selected:
+			continue
+		var sp = hud.banner_pos.get(u)
+		if sp != null and box.has_point(sp as Vector2):
+			selected.append(u)
+	sfx.play("click", -4.0)
+
+## Retângulo de seleção em andamento, em coordenadas de tela. Tamanho zero se o botão
+## esquerdo não foi arrastado o bastante.
+func select_box() -> Rect2:
+	if not lc_held:
+		return Rect2()
+	var m := get_viewport().get_mouse_position()
+	if m.distance_to(lc_start) < BOX_MIN:
+		return Rect2()
+	return Rect2(lc_start, Vector2.ZERO).expand(m)
 
 ## Unidade própria cujo estandarte está sob o ponto da tela (retângulo 34 x 18).
 func _own_banner_at(screen: Vector2) -> Unit:

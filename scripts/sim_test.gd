@@ -9,7 +9,6 @@ const AI = preload("res://scripts/ai_commander.gd")
 
 var fails := 0
 var cats := {}
-var samples := 0
 var rout_bad := 0
 
 func check(cond: bool, what: String) -> void:
@@ -221,7 +220,7 @@ func _test_daylight() -> void:
 	check((noon.sun_color as Color).b > (am.sun_color as Color).b, "luz mais quente de manhã")
 
 func _test_detour(terrain) -> void:
-	print("[desvio em volta de outras unidades]")
+	print("[caminho ignora outras unidades]")
 	var s := new_sim(terrain)
 	var a := s.add_unit(0, Cfg.LIGHT, 100, false)
 	var b := s.add_unit(0, Cfg.HEAVY, 200, false)
@@ -229,37 +228,15 @@ func _test_detour(terrain) -> void:
 	s.place_unit(b, Vector2(-700, -900), Vector2(1, 0))
 	s.finalize()
 	s.order_move(a, Vector2(-500, -900), Vector2(1, 0), false)
-	check(not a.thru, "desvio pequeno: contorna em vez de atravessar")
-	check(a.path.size() >= 2, "o caminho dá a volta (mais de um ponto)")
-	var inside := false
-	var c := a.center
-	for p in a.path:
-		for k in 21:
-			var q := c.lerp(p, k / 20.0)
-			if s._rects_touch_at(q, a, b, 0.0):
-				inside = true
-		c = p
-	check(not inside, "o caminho não entra na formação da outra unidade")
+	check(a.path.size() == 1, "em terreno livre o caminho é a reta, mesmo com unidade no meio")
 	var reached := false
 	for k in 4000:
 		s.tick(Cfg.TICK)
 		if a.path.is_empty():
 			reached = true
 			break
-	check(reached, "chega ao destino sem ficar presa")
+	check(reached, "chega ao destino passando pela outra unidade")
 	check(a.center.distance_to(Vector2(-500, -900)) < 40.0, "chega perto do destino")
-	# só 2 pontos de passagem possíveis: cercar o destino exige desvio enorme -> atravessa
-	var s2 := new_sim(terrain)
-	var m := s2.add_unit(0, Cfg.LIGHT, 100, false)
-	s2.place_unit(m, Vector2(-900, -900), Vector2(1, 0))
-	var wall: Array = []
-	for k in 18:
-		var w := s2.add_unit(0, Cfg.HEAVY, 300, false)
-		s2.place_unit(w, Vector2(-700, -1300 + k * 70), Vector2(1, 0))
-		wall.append(w)
-	s2.finalize()
-	s2.order_move(m, Vector2(-500, -900), Vector2(1, 0), false)
-	check(m.thru, "desvio grande demais: passa por entre as unidades")
 
 func _test_rout_credit(terrain) -> void:
 	print("[moral para quem pôs o inimigo em pânico]")
@@ -457,22 +434,6 @@ func _overlap_count(s: BattleSim) -> Array:
 							var key2 := "mesma unidade" if ua == ub else ("aliados" if ua.side == ub.side else "inimigos")
 							key2 += " grade=%s/%s estado=%d/%d" % [ua.in_grid, ub.in_grid, ua.state, ub.state]
 							cats[key2] = int(cats.get(key2, 0)) + 1
-							if ua != ub and ua.state == 0 and ub.state == 0 and samples < 8:
-								samples += 1
-								for uu: Unit in [ua, ub]:
-									print("      amostra t=%d: %s tipo=%d formada=%s grade=%s rigid=%s contatos=%d fileiras=%d/%d marcha=%s centro=%s alvo=%s sq=%s ativo=%s" % [
-										int(s.time), uu.label, uu.type, uu.formed, uu.in_grid, uu.rigid, uu.contacts, uu.files, uu.files_want,
-										not uu.path.is_empty(), str(uu.center.round()), uu.target.label if uu.target != null else "-", str(uu.squeeze_vec), uu.active])
-								print("        d=%.2f pos=%s/%s (c%d,r%d)x(c%d,r%d)" % [d, str(s.pos[i].round()), str(s.pos[j].round()), s.col_of[i], s.row_of[i], s.col_of[j], s.row_of[j]])
-							if ua == ub and samples < 5:
-								samples += 1
-								print("      amostra: %s tipo=%d contatos=%d marcha=%s rigid=%s formada=%s grade=%s  (c%d,r%d) x (c%d,r%d) d=%.2f prof=%d/%d t=%d" % [
-									ua.label, ua.type, ua.contacts, not ua.path.is_empty(), ua.rigid, ua.formed, ua.in_grid,
-									s.col_of[i], s.row_of[i], s.col_of[j], s.row_of[j], d,
-									ua.depth[s.col_of[i]], ua.depth[s.col_of[j]], int(s.time)])
-								print("        estado=%d declive=%.1f/%.1f rout_t=%.1f pos=%s centro=%s n=%d" % [ua.state,
-									s.terrain.slope_at(s.pos[i].x, s.pos[i].y), s.terrain.slope_at(s.pos[j].x, s.pos[j].y),
-									ua.rout_t, str(s.pos[i].round()), str(ua.center.round()), ua.n])
 						elif d < rr * 0.85:
 							soft += 1
 		total += a.size()

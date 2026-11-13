@@ -72,7 +72,11 @@ func _think(u: Unit, mine: Array) -> void:
 	var ax := (cf - ca).normalized() if cf.distance_to(ca) > 1.0 else u.facing
 	var best: Unit = null
 	var bs := 1e18
+	var car: bool = u.type == Cfg.CHARIOT
 	for e: Unit in foes:
+		# inimigo em outra região do terreno (separada por declives que u não vence): inalcançável
+		if not sim.terrain.connected(u.center, e.center, car):
+			continue
 		var rel := e.center - u.center
 		var d := rel.length()
 		var sc := absf(rel.dot(ax)) + 2.5 * absf(rel.cross(ax)) + 45.0 * int(load.get(e, 0))
@@ -89,6 +93,8 @@ func _think(u: Unit, mine: Array) -> void:
 			bs = sc
 			best = e
 	if best == null:
+		if u.target != null:
+			sim.order_halt(u)
 		return
 	var dist := u.center.distance_to(best.center)
 	if dist < 1.0:
@@ -117,6 +123,9 @@ func _think_missile(u: Unit, foes: Array) -> void:
 		var dir := (near.center - u.center) / nd
 		for f: Unit in sim.units:
 			if f.side != side or f == u or f.state != 0:
+				continue
+			# só espera quem avança ou luta; um aliado parado (sem rota) seguraria a fila para sempre
+			if f.path.is_empty() and f.contacts == 0:
 				continue
 			var rel := f.center - u.center
 			var ahead := rel.dot(dir)

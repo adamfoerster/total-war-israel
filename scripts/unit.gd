@@ -22,9 +22,6 @@ var want_facing := Vector2.ZERO
 var dest_facing := Vector2.ZERO
 var arrived_at := -100.0   # tempo da simulação em que concluiu a última movimentação
 var rally_ready := 0.0     # tempo da simulação a partir do qual o general pode reunir de novo
-var thru := false          # caminho atravessa outras unidades (desvio grande demais)
-var blocked_t := 0.0       # tempo parada por outra unidade no caminho
-var replan_at := 1.0
 var files := 1
 var files_want := 0              # largura a restaurar após estreitar num vão (0 = não estreitada)
 var squeeze_t := 0.0             # tempo até a próxima medição do vão

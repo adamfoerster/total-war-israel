@@ -2,7 +2,7 @@
 
 Jogo de batalhas táticas em tempo real ambientado na Terra Prometida nos tempos do Antigo Testamento. Feito em Godot 4 e jogado no navegador.
 
-A versão 0.18.0 tem um único mapa, Jerusalém, construído a partir de dados reais de elevação, e uma batalha contra a IA.
+A versão 0.19.0 tem um único mapa, Jerusalém, construído a partir de dados reais de elevação, e uma batalha contra a IA.
 
 ## Como jogar
 
@@ -22,6 +22,7 @@ A força de cada lado soma pontos pelos soldados das unidades sob controle (em f
 | --- | --- |
 | Selecionar unidade | Clique no card ou no estandarte dela no campo |
 | Selecionar várias | Ctrl + clique soma ou tira uma unidade; Shift + clique seleciona todos os cards entre a última unidade selecionada e a clicada |
+| Selecionar por área | Arraste com o botão esquerdo no campo: seleciona as unidades cujo estandarte fica dentro do retângulo. Com Ctrl ou Shift, soma à seleção atual |
 | Selecionar todas | Ctrl+A |
 | Mover | Botão direito no terreno. Arraste antes de soltar para desenhar a linha de frente: as unidades ficam de frente perpendicular à linha (arrastando da esquerda para a direita, olham para cima). Com várias unidades selecionadas, elas formam essa linha lado a lado, centrada no ponto inicial e mantendo a ordem esquerda-direita atual (sem arrasto, mantêm a disposição relativa). Enquanto o botão está pressionado, cada unidade selecionada mostra um retângulo verde com o posto final dela, a linha arrastada e uma seta verde com a direção. Depois da ordem, o destino de cada unidade a caminho fica marcado em branco. Ao concluir o movimento, uma seta amarela no chão mostra a frente por 5 s |
 | Escolher a largura da linha | Continue arrastando o botão direito além de 60 px: o comprimento da linha arrastada vira a largura total da linha, repartida entre as unidades selecionadas (mínimo de 10 soldados na frente de cada uma), centrada no meio do trecho arrastado. A prévia troca as caixas por um círculo para cada soldado |
@@ -75,9 +76,8 @@ As escolhas são guardadas em `user://settings.cfg` e valem nas próximas partid
 
 ### Caminhos e desvios
 
-- Ao receber uma ordem de movimento ou de ataque, a unidade dá a volta nas formações das outras unidades. Só atravessa por entre elas se o desvio for muito grande (mais que o dobro do caminho direto mais 150 m) ou se não houver caminho livre.
-- Se outra unidade entrar no caminho, ela espera em vez de empurrar os soldados dela; depois de 1 s recalcula o desvio, e depois de 5 s parada aceita passar por entre as unidades.
-- Se a linha reta até o destino passa por um vão entre outras unidades, a unidade segue por ele estreitando a frente: o vão é medido à frente dela e a nova frente é o número de soldados que cabem no vão menos um (arredondado para baixo; num vão de 6, a frente vira 5). Depois de passar, volta à largura original. Abaixo de 3 soldados na frente ela não estreita e passa por entre as unidades, como antes.
+- O caminho de uma ordem de movimento ou de ataque só desvia de obstáculos do terreno (declives que o tipo da unidade não vence). Outras unidades no trajeto não são contornadas: muitas vezes já terão saído do caminho quando a unidade chegar lá.
+- Se encontra outras unidades no trajeto, a unidade passa pelo vão entre elas estreitando a frente: o vão é medido à frente dela e a nova frente é o número de soldados que cabem no vão menos um (arredondado para baixo; num vão de 6, a frente vira 5). Depois de passar, volta à largura original. Abaixo de 3 soldados na frente ela não estreita e passa por entre as unidades, como antes.
 - Soldados só andam quando o passo os aproxima do posto: os que não têm espaço ficam parados em vez de tremer no lugar.
 - Unidades selecionadas mostram o caminho que vão percorrer, em seta branca opaca. Ao passar o mouse sobre o estandarte de uma unidade amiga não selecionada que esteja em movimento, aparecem o caminho e o quadrado do destino com 50% de transparência.
 
@@ -149,6 +149,12 @@ Testes da simulação (regras de terreno, moral, general e uma batalha IA × IA 
 godot --headless --path . -- --simtest
 ```
 
+A batalha usa uma semente aleatória, impressa no início. Para repetir uma rodada exata, passe a semente; `--so-batalha` pula os testes curtos:
+
+```bash
+godot --headless --path . -- --simtest --so-batalha --seed 87122
+```
+
 Teste de fumaça da interface (preparo, batalha, ordens, resultado):
 
 ```bash
@@ -169,6 +175,7 @@ godot --headless --path . -s tools/build_heightmap.gd
 
 - Os dados de 30 m suavizam as escarpas e incluem a superfície moderna da cidade.
 - Não há muralhas nem edifícios.
+- O relevo divide o terreno dos carros em regiões separadas por declives acima de 15°. Carros posicionados numa região pequena só alcançam inimigos que entrem nela; a IA não manda carros (nem infantaria) atrás de inimigos de outra região.
 - Unidades em fuga só voltam ao controle se o general as reunir (tecla G, a uma distância curta).
 - Os corpos mais antigos desaparecem depois do limite de 2.500 por lado e tipo.
 - Em combate geral com fuga em massa, o relógio do jogo pode desacelerar no navegador; o número de soldados nunca é reduzido.

@@ -4,6 +4,17 @@ Todas as mudanças relevantes deste projeto são registradas aqui.
 
 O formato segue o [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e o projeto usa [versionamento semântico](https://semver.org/lang/pt-BR/).
 
+## [0.19.0] - 2026-11-13
+
+### Adicionado
+
+- Seleção por retângulo: arrastar com o botão esquerdo no campo desenha um retângulo e seleciona as unidades próprias cujo estandarte fica dentro dele (Ctrl ou Shift somam à seleção atual).
+
+### Alterado
+
+- A tela de fim de partida mostra quantas unidades de cada lado estavam em fuga no fim ("fugiram"), em vez dos soldados que já tinham saído da área controlável.
+- O cálculo de caminho considera só os obstáculos do terreno. Uma unidade não dá mais a volta em outras unidades que estejam no trajeto (e que muitas vezes estavam só de passagem); ao encontrá-las, estreita a frente para passar pelo vão ou passa por entre elas.
+
 ## [0.18.0] - 2026-11-13
 
 ### Adicionado
@@ -20,6 +31,7 @@ O formato segue o [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e 
 
 ### Alterado
 
+- `--simtest` imprime a semente aleatória da batalha; `--seed N` repete uma rodada exata e `--so-batalha` pula os testes curtos.
 - Hora do dia padrão passou de 10:00 para 6:00.
 - Os exércitos começam mais afastados do centro, cada um no seu setor (Israel a partir de z = 480, os filisteus a partir de z = -480).
 - Tamanho das unidades por tipo na tela de preparo (padrão / máximo): infantaria pesada 70 / 100, infantaria leve 100 / 160, arqueiros e fundeiros 60 / 100, carros de guerra 20 / 50. Antes, todos iam de 100 a 300 homens. Trocar o tipo volta ao padrão do novo tipo.
@@ -32,6 +44,8 @@ O formato segue o [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e 
 - Soldados afundados no terreno nas pontas da formação em relevo acidentado: cada soldado agora acompanha a altura do chão sob ele, e não só o plano inclinado no centro da unidade.
 - Soldados que saltavam dentro da unidade quando ela perdia homens em marcha: a unidade entra na grade no mesmo tick em que sai da formação rígida, em vez de esperar a próxima varredura com os soldados parados.
 - Soldados de uma unidade atravessados nos de uma unidade aliada parada (por exemplo, carros estreitados para passar num vão): a varredura que põe as formações na grade agora alarga o teste de contato pelo quanto os soldados estão fora do posto, e a formação parada entra na grade antes de ser alcançada.
+- Fugitivos da mesma unidade empilhados uns sobre os outros quando o declive desviava ou travava parte deles: a unidade em fuga passa para a grade (com colisão) antes de mover qualquer soldado no tick em que o terreno interfere.
+- Batalhas que nunca terminavam: a IA escolhia alvos em outra região do terreno, inalcançáveis por causa dos declives (carros parados para sempre), e atiradores esperavam atrás de um aliado imóvel. Agora a IA só ataca inimigos da mesma região conectada da grade de navegação, e atiradores só esperam por aliados que marcham ou lutam.
 
 ## [0.17.1] - 2026-11-12
 

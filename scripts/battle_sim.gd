@@ -285,74 +285,11 @@ func order_move(u: Unit, dest: Vector2, facing: Vector2, run: bool) -> void:
 	dest = reachable(dest, u)
 	u.path = plan_path(u, dest, null)
 	u.path_i = 0
-	u.blocked_t = 0.0
-	u.replan_at = Cfg.BLOCK_REPLAN
 
-## Caminho de u até `dest` dando a volta nas outras unidades (exceto `exclude`). Se o desvio
-## for muito maior que o caminho direto, ou não existir, devolve o direto e marca u.thru:
-## nesse caso a unidade passa por entre as outras.
-func plan_path(u: Unit, dest: Vector2, exclude) -> PackedVector2Array:
-	var chariot := u.type == Cfg.CHARIOT
-	u.thru = false
-	var cells := _obstacle_cells(u, exclude, u.center, dest)
-	if cells.is_empty():
-		return terrain.find_path(u.center, dest, chariot)
-	if _straight_fits(u, u.center, dest, exclude):
-		# a reta passa por um vão onde a unidade cabe estreitando a frente
-		var direct0: PackedVector2Array = terrain.find_path(u.center, dest, chariot)
-		if direct0.size() <= 2:
-			return direct0
-	var around: PackedVector2Array = terrain.find_path_blocked(u.center, dest, chariot, cells)
-	var straight := u.center.distance_to(dest)
-	if not around.is_empty():
-		var la := _path_len(u.center, around)
-		if la <= straight * 1.3 + 40.0:
-			return around
-		var direct: PackedVector2Array = terrain.find_path(u.center, dest, chariot)
-		if la <= _path_len(u.center, direct) * Cfg.DETOUR_RATIO + Cfg.DETOUR_ADD:
-			return around
-		u.thru = true
-		return direct
-	u.thru = true
-	return terrain.find_path(u.center, dest, chariot)
-
-func _path_len(from: Vector2, path: PackedVector2Array) -> float:
-	var l := 0.0
-	var c := from
-	for p in path:
-		l += c.distance_to(p)
-		c = p
-	return l
-
-## Células da grade de navegação ocupadas pelas formações das outras unidades, com folga
-## para a largura de u. Ignora as células perto da origem e do destino.
-func _obstacle_cells(u: Unit, exclude, a: Vector2, b: Vector2) -> Array:
-	var out: Array = []
-	var seen := {}
-	var m := minf(maxf(u.files * float(u.t.spacing), u.rows() * float(u.t.spacing)) * 0.5, 30.0) + 2.0
-	var cell := Cfg.NAV_CELL
-	for o: Unit in units:
-		if o == u or is_same(o, exclude) or o.state != 0 or o.n == 0:
-			continue
-		var sp: float = o.t.spacing
-		var hw := o.files * sp * 0.5 + m + cell * 0.5
-		var hd := o.rows() * sp * 0.5 + m + cell * 0.5
-		var f := o.facing
-		var r := Vector2(-f.y, f.x)
-		var ext := absf(r.x) * hw + absf(f.x) * hd
-		var exz := absf(r.y) * hw + absf(f.y) * hd
-		var c0: Vector2i = terrain._cell(o.center - Vector2(ext, exz))
-		var c1: Vector2i = terrain._cell(o.center + Vector2(ext, exz))
-		for cz in range(c0.y, c1.y + 1):
-			for cx in range(c0.x, c1.x + 1):
-				var wp := Vector2(-HALF + (cx + 0.5) * cell, -HALF + (cz + 0.5) * cell)
-				var d := wp - o.center
-				if absf(d.dot(r)) <= hw and absf(d.dot(f)) <= hd 						and wp.distance_squared_to(a) > 900.0 and wp.distance_squared_to(b) > 900.0:
-					var id := Vector2i(cx, cz)
-					if not seen.has(id):
-						seen[id] = true
-						out.append(id)
-	return out
+## Caminho de u até `dest`. Só o terreno conta como obstáculo: as outras unidades são
+## tratadas no caminho, estreitando a frente (_update_squeeze) e pela colisão na grade.
+func plan_path(u: Unit, dest: Vector2, _exclude) -> PackedVector2Array:
+	return terrain.find_path(u.center, dest, u.type == Cfg.CHARIOT)
 
 ## Muda a largura da formação para `nf` soldados na frente (mínimo Cfg.MIN_LINE_FILES,
 ## ou todos, se a unidade tiver menos). Os soldados mantêm a ordem (fileira, coluna) e
@@ -839,25 +776,6 @@ func _free_dist(p: Vector2, d: Vector2, cap: float, obs: Array) -> float:
 			continue
 		best = minf(best, maxf(float(hit[0]), 0.0))
 	return best
-
-## A linha reta de a até b passa entre as outras unidades com folga para a frente mínima
-## de estreitamento? Ignora unidades que já cobrem a origem ou o destino.
-func _straight_fits(u: Unit, a: Vector2, b: Vector2, exclude) -> bool:
-	var l := a.distance_to(b)
-	if l < 1.0:
-		return true
-	var d := (b - a) / l
-	var grow := mini(Cfg.SQUEEZE_MIN_FILES + 1, u.n) * float(u.t.spacing) * 0.5
-	for o: Unit in units:
-		if o == u or is_same(o, exclude) or o.state != 0 or o.n == 0:
-			continue
-		var hit := _ray_rect(a, d, o, grow)
-		if hit.is_empty() or float(hit[1]) < 0.0 or float(hit[0]) > l:
-			continue
-		if float(hit[0]) <= 0.0 or float(hit[1]) >= l:
-			continue   # a origem ou o destino está colado nessa unidade
-		return false
-	return true
 
 ## Estreita a frente para passar por um vão entre outras unidades e volta à largura
 ## original depois. O vão é medido na retaguarda, no centro, na frente e um pouco adiante;
