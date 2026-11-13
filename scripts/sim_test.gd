@@ -562,8 +562,8 @@ func _test_battle(terrain) -> void:
 	if s.winner < 0:
 		for u: Unit in s.units:
 			if u.state == 0:
-				print("    resta: %s tipo=%d n=%d moral=%.0f centro=%s alvo=%s rota=%d contatos=%d ativo=%s declive=%.1f" % [u.label, u.type, u.n, u.morale,
-					str(u.center.round()), u.target.label if u.target != null else "-", u.path.size(), u.contacts, u.active,
+				print("    resta: %s tipo=%d n=%d moral=%.0f centro=%s alvo=%s rota=%d contatos=%d ativo=%s munição=%d fadiga=%.0f declive=%.1f" % [u.label, u.type, u.n, u.morale,
+					str(u.center.round()), u.target.label if u.target != null else "-", u.path.size(), u.contacts, u.active, u.ammo, u.fatigue,
 					s.terrain.slope_at(u.center.x, u.center.y)])
 	print("  tick médio %.2f ms, pior %.1f ms" % [t_total / 1000.0 / ticks, t_max / 1000.0])
 	print("  sobreposições fortes por categoria: ", cats)

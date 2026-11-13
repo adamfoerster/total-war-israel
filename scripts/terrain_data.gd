@@ -19,6 +19,9 @@ var nav_car := AStarGrid2D.new()
 # Cfg e podem mudar durante a partida (tela de configurações), ver set_limits
 var lim_foot := Cfg.SLOPE_IMPASS
 var lim_car := Cfg.SLOPE_CHARIOT
+# região conectada de cada célula das grades (-1: bloqueada); ver connected()
+var comp_foot := PackedInt32Array()
+var comp_car := PackedInt32Array()
 
 func load_map() -> void:
 	var path := "res://assets/jerusalem_height.res"
@@ -53,8 +56,8 @@ func load_map() -> void:
 			gx[k] = a
 			gz[k] = b
 			slope[k] = rad_to_deg(atan(sqrt(a * a + b * b)))
-	_build_nav(nav_foot, lim_foot, 0)
-	_build_nav(nav_car, lim_car, 3)
+	comp_foot = _build_nav(nav_foot, lim_foot, 0)
+	comp_car = _build_nav(nav_car, lim_car, 3)
 
 ## Declive máximo de quem é carro (true) ou soldado a pé (false).
 func limit(chariot: bool) -> float:
@@ -64,10 +67,10 @@ func limit(chariot: bool) -> float:
 func set_limits(foot: float, car: float) -> void:
 	if foot != lim_foot:
 		lim_foot = foot
-		_build_nav(nav_foot, lim_foot, 0)
+		comp_foot = _build_nav(nav_foot, lim_foot, 0)
 	if car != lim_car:
 		lim_car = car
-		_build_nav(nav_car, lim_car, 3)
+		comp_car = _build_nav(nav_car, lim_car, 3)
 
 func _fallback() -> void:
 	# Relevo sintético, usado apenas se o heightmap real não estiver presente.
@@ -83,7 +86,7 @@ func _fallback() -> void:
 
 ## margin: nós extras (10 m cada) ao redor da célula que também precisam ser transitáveis;
 ## dá folga para a largura da formação dos carros.
-func _build_nav(g: AStarGrid2D, lim: float, margin: int) -> void:
+func _build_nav(g: AStarGrid2D, lim: float, margin: int) -> PackedInt32Array:
 	var nn := Cfg.NAV_N
 	g.region = Rect2i(0, 0, nn, nn)
 	g.cell_size = Vector2(Cfg.NAV_CELL, Cfg.NAV_CELL)
@@ -100,6 +103,47 @@ func _build_nav(g: AStarGrid2D, lim: float, margin: int) -> void:
 			g.set_point_solid(id, s > lim)   # explícito: a grade pode estar sendo refeita
 			if s <= lim:
 				g.set_point_weight_scale(id, 1.0 + s / 10.0)
+	return _label(g)
+
+## Rotula as regiões conectadas da grade (vizinhos em cruz bastam: a diagonal só vale
+## com as duas células em cruz livres).
+func _label(g: AStarGrid2D) -> PackedInt32Array:
+	var nn := Cfg.NAV_N
+	var lab := PackedInt32Array()
+	lab.resize(nn * nn)
+	lab.fill(-2)
+	var next := 0
+	for k in nn * nn:
+		if lab[k] != -2:
+			continue
+		if g.is_point_solid(Vector2i(k % nn, k / nn)):
+			lab[k] = -1
+			continue
+		lab[k] = next
+		var stack := PackedInt32Array([k])
+		while not stack.is_empty():
+			var a := stack[stack.size() - 1]
+			stack.resize(stack.size() - 1)
+			var ax := a % nn
+			for b: int in [a - 1 if ax > 0 else -1, a + 1 if ax < nn - 1 else -1, a - nn, a + nn]:
+				if b < 0 or b >= nn * nn or lab[b] != -2:
+					continue
+				if g.is_point_solid(Vector2i(b % nn, b / nn)):
+					lab[b] = -1
+					continue
+				lab[b] = next
+				stack.append(b)
+		next += 1
+	return lab
+
+## a e b estão na mesma região da grade (carros ou a pé)? Pontos em célula bloqueada
+## contam pela célula livre mais próxima, como em find_path.
+func connected(a: Vector2, b: Vector2, chariot: bool) -> bool:
+	var g := nav_car if chariot else nav_foot
+	var lab := comp_car if chariot else comp_foot
+	var ca := _nearest_free(g, _cell(a))
+	var cb := _nearest_free(g, _cell(b))
+	return lab[ca.y * Cfg.NAV_N + ca.x] == lab[cb.y * Cfg.NAV_N + cb.x]
 
 func height(x: float, z: float) -> float:
 	var fx := clampf((x + HALF) * INV, 0.0, N - 1.001)

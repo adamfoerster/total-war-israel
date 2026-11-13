@@ -612,7 +612,7 @@ func _broadphase() -> void:
 		u.dense = false
 		u.qr = 2 if u.type == Cfg.CHARIOT else 1
 		if u.state == 0:
-			u.brad = _form_radius(u) + u.spill
+			u.brad = _form_radius(u)
 	for a in cnt:
 		var ua: Unit = units[a]
 		if ua.state == 2:
@@ -621,7 +621,7 @@ func _broadphase() -> void:
 			var ub: Unit = units[b]
 			if ub.state == 2:
 				continue
-			var rr := ua.brad + ub.brad + 8.0
+			var rr := ua.brad + ub.brad + 8.0 + ua.spill + ub.spill
 			if ua.center.distance_squared_to(ub.center) >= rr * rr:
 				continue
 			var hit := false
@@ -1368,6 +1368,7 @@ func _rebalance(u: Unit) -> void:
 func _start_rout(u: Unit) -> void:
 	_unform(u)
 	u.state = 1
+	u.spill = 0.0   # na fuga, brad já cobre todos os soldados
 	u.target = null
 	u.path = PackedVector2Array()
 	u.contacts = 0
@@ -1462,6 +1463,19 @@ func _update_rout(u: Unit, dt: float) -> void:
 	var fr := Vector2(-fd.y, fd.x)
 	var spread := 0.75 / maxf(u.brad, 5.0)
 	awake_count += u.n
+	if not ing:
+		# sem colisão só enquanto o campo de fuga anda livre: se o declive desviar ou travar
+		# alguém, os de trás passariam por cima. Nesse caso entra na grade antes de mover.
+		var k := s + u.n - 1
+		while k >= s:
+			var p0 := pos[k]
+			var q0 := p0 + fd.rotated(clampf((p0 - c).dot(fr) * spread, -0.75, 0.75)) * step
+			if absf(q0.x) <= ex and absf(q0.y) <= ex and _terrain_step(p0, q0, lim) != q0:
+				u.rout_blocked = true
+				_grid_add(u)
+				ing = true
+				break
+			k -= 1
 	while i >= s:
 		var p := pos[i]
 		# campo divergente: quem está à esquerda foge mais para a esquerda, etc.
