@@ -141,6 +141,19 @@ func nearest_passable(p: Vector2, chariot: bool) -> Vector2:
 		return p
 	return g.get_point_position(_nearest_free(g, c))
 
+## Mesmo que find_path, tratando as células `cells` (Vector2i) como bloqueadas durante a busca.
+func find_path_blocked(a: Vector2, b: Vector2, chariot: bool, cells: Array) -> PackedVector2Array:
+	var g := nav_car if chariot else nav_foot
+	var marked: Array = []
+	for c: Vector2i in cells:
+		if not g.is_point_solid(c):
+			g.set_point_solid(c, true)
+			marked.append(c)
+	var out := find_path(a, b, chariot)
+	for c: Vector2i in marked:
+		g.set_point_solid(c, false)
+	return out
+
 ## Caminho (sem o ponto inicial) de a até b; termina no ponto alcançável mais próximo.
 func find_path(a: Vector2, b: Vector2, chariot: bool) -> PackedVector2Array:
 	var g := nav_car if chariot else nav_foot

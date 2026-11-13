@@ -12,17 +12,26 @@ const BattleSim = preload("res://scripts/battle_sim.gd")
 const AI = preload("res://scripts/ai_commander.gd")
 const Models = preload("res://scripts/models.gd")
 const CameraRig = preload("res://scripts/camera_rig.gd")
+const SHOT_MAX := 480       # feixes simultâneos por tipo (flechas / pedras)
+const SHOTS_PER_VOLLEY := 10
+const BLOOD_GROW_T := 5.0   # segundos para a mancha chegar ao tamanho final
+const BLOOD_START := 0.15   # fração inicial do tamanho
 const Hud = preload("res://scripts/ui/battle_hud.gd")
 const Sfx = preload("res://scripts/sfx.gd")
+const Daylight = preload("res://scripts/daylight.gd")
+const Settings = preload("res://scripts/settings.gd")
 
 var army: Array = []          # [{type, men, general}]
+var sun: DirectionalLight3D
+var env: Environment
+var day: Dictionary
+var hour := 10.0              # hora do dia escolhida no preparo
 var terrain: TerrainData
 var sim: BattleSim
 var ai: AI
 var rig: CameraRig
 var hud: Hud
 var sfx
-var fight_t := 0.0   # intervalo até o próximo som de combate
 var nodes: Array = []         # MultiMeshInstance3D por unidade
 var bufs: Array = []          # PackedFloat32Array por unidade
 var last_facing: Array = []
@@ -43,9 +52,17 @@ var marker: MeshInstance3D
 var marker_t := 0.0
 var arrows: MultiMeshInstance3D
 var arrow_list: Array = []    # [de3, para3, t, dur]
+var stones: MultiMeshInstance3D
+var stone_list: Array = []    # [de3, para3, t, dur]
 var ended := false
+var fight_t := 0.0   # intervalo até o próximo som de combate
+var corpses := {}             # lado * 10 + tipo -> [MultiMesh, total já desenhado]
+var blood_mm: MultiMesh
+var blood_n := 0
+var blood_grow: Array = []    # manchas em crescimento: [slot, basis final, origem, idade]
 
 func _ready() -> void:
+	Settings.load_file()
 	var loading := Label.new()
 	loading.text = "Carregando o relevo de Jerusalém..."
 	loading.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
@@ -57,24 +74,46 @@ func _ready() -> void:
 	_build_world()
 	cl.queue_free()
 	ready_ok = true
+	sfx.play_any(["inicio-bom", "inicio-medio", "inicio-ruim"])
+
+## Muda a hora do dia: posição e cor do sol, céu e luz ambiente.
+func set_hour(h: float) -> void:
+	hour = h
+	day = Daylight.at(h)
+	env.background_color = day.sky
+	env.ambient_light_color = (day.sky as Color).lerp(Color.WHITE, 0.7)
+	sun.light_color = day.sun_color
+	sun.light_energy = day.sun_energy
+	sun.transform = Transform3D(Basis.looking_at(-(day.to_sun as Vector3), Vector3.UP), Vector3.ZERO)
+	env.ambient_light_energy = day.ambient_energy if Settings.sun else 1.0
+
+## Aplica as configurações de exibição (sol, sombras) à cena.
+func apply_settings() -> void:
+	sun.visible = Settings.sun
+	sun.shadow_enabled = Settings.shadows
+	env.ambient_light_energy = day.ambient_energy if Settings.sun else 1.0
+	var cast := GeometryInstance3D.SHADOW_CASTING_SETTING_ON if Settings.unit_shadows 		else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	for n: GeometryInstance3D in nodes:
+		n.cast_shadow = cast
 
 func _build_world() -> void:
 	terrain = TerrainData.new()
 	terrain.load_map()
-	var env := Environment.new()
+	env = Environment.new()
 	env.background_mode = Environment.BG_COLOR
-	env.background_color = Color(0.62, 0.74, 0.88)
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color(1, 1, 1)
-	env.ambient_light_energy = 0.55
 	var we := WorldEnvironment.new()
 	we.environment = env
 	add_child(we)
-	var sun := DirectionalLight3D.new()
-	sun.rotation_degrees = Vector3(-48, -35, 0)
-	sun.light_energy = 1.1
-	sun.shadow_enabled = false
+	sun = DirectionalLight3D.new()
+	sun.shadow_enabled = true
+	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
+	sun.directional_shadow_max_distance = 2500.0
+	sun.directional_shadow_split_1 = 0.15
+	sun.shadow_bias = 0.08
+	sun.shadow_normal_bias = 1.5
 	add_child(sun)
+	set_hour(hour)
 	var tm := MeshInstance3D.new()
 	tm.mesh = TerrainMesh.build(terrain)
 	add_child(tm)
@@ -117,7 +156,7 @@ func _build_world() -> void:
 		var node := MultiMeshInstance3D.new()
 		node.multimesh = mm
 		node.custom_aabb = AABB(Vector3(-2000, -50, -2000), Vector3(4000, 600, 4000))
-		node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 		add_child(node)
 		nodes.append(node)
 		bufs.append(buf)
@@ -125,22 +164,87 @@ func _build_world() -> void:
 		view_c.append(u.center)
 		view_f.append(u.facing)
 
+	# poças de sangue no chão (um disco achatado por morte)
+	var disc := CylinderMesh.new()
+	disc.top_radius = 1.0
+	disc.bottom_radius = 1.0
+	disc.height = 0.02
+	disc.radial_segments = 14
+	disc.rings = 1
+	var bmat := StandardMaterial3D.new()
+	bmat.albedo_color = Color(0.36, 0.03, 0.03, 0.72)
+	bmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	bmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	disc.material = bmat
+	blood_mm = MultiMesh.new()
+	blood_mm.transform_format = MultiMesh.TRANSFORM_3D
+	blood_mm.mesh = disc
+	blood_mm.instance_count = Cfg.BLOOD_CAP
+	blood_mm.visible_instance_count = 0
+	var bn := MultiMeshInstance3D.new()
+	bn.multimesh = blood_mm
+	bn.custom_aabb = AABB(Vector3(-2000, -50, -2000), Vector3(4000, 600, 4000))
+	bn.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(bn)
+	# corpos deitados: o mesmo modelo do soldado, tombado
+	for k: int in meshes:
+		var cm := MultiMesh.new()
+		cm.transform_format = MultiMesh.TRANSFORM_3D
+		cm.mesh = meshes[k]
+		cm.instance_count = Cfg.CORPSE_CAP
+		cm.visible_instance_count = 0
+		var cn := MultiMeshInstance3D.new()
+		cn.multimesh = cm
+		cn.custom_aabb = AABB(Vector3(-2000, -50, -2000), Vector3(4000, 600, 4000))
+		cn.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		add_child(cn)
+		corpses[k] = [cm, 0]
+	sim.record_deaths = true
+	apply_settings()
+
 	# flechas / pedras (apenas visuais)
 	var am := MultiMesh.new()
 	am.transform_format = MultiMesh.TRANSFORM_3D
+	# cada instância é um feixe de 4 projéteis finos (uma só malha, um só desenho)
 	var bx := BoxMesh.new()
-	bx.size = Vector3(0.25, 0.25, 2.2)
+	bx.size = Vector3(0.09, 0.09, 2.2)
+	var st := SurfaceTool.new()
+	for o: Vector3 in [Vector3(-0.6, 0.25, 0.0), Vector3(0.6, -0.2, 0.5), Vector3(-0.2, -0.5, -0.6), Vector3(0.3, 0.55, 0.9)]:
+		st.append_from(bx, 0, Transform3D(Basis.IDENTITY, o))
 	var amat := StandardMaterial3D.new()
 	amat.albedo_color = Color(0.15, 0.12, 0.1)
 	amat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	bx.material = amat
-	am.mesh = bx
-	am.instance_count = 240
+	var bundle := st.commit()
+	bundle.surface_set_material(0, amat)
+	am.mesh = bundle
+	am.instance_count = SHOT_MAX
 	am.visible_instance_count = 0
 	arrows = MultiMeshInstance3D.new()
 	arrows.multimesh = am
 	arrows.custom_aabb = AABB(Vector3(-2000, -50, -2000), Vector3(4000, 900, 4000))
 	add_child(arrows)
+
+	# pedras das fundas: 10 pontos cinzas por instância
+	var sm := MultiMesh.new()
+	sm.transform_format = MultiMesh.TRANSFORM_3D
+	var pt := BoxMesh.new()
+	pt.size = Vector3(0.15, 0.15, 0.15)
+	var sst := SurfaceTool.new()
+	for i in 10:
+		var po := Vector3(randf_range(-1.2, 1.2), randf_range(-0.8, 0.8), randf_range(-2.2, 2.2))
+		sst.append_from(pt, 0, Transform3D(Basis.IDENTITY, po))
+	var smat := StandardMaterial3D.new()
+	smat.albedo_color = Color(0.55, 0.55, 0.57)
+	smat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	var sbundle := sst.commit()
+	sbundle.surface_set_material(0, smat)
+	sm.mesh = sbundle
+	sm.instance_count = SHOT_MAX
+	sm.visible_instance_count = 0
+	stones = MultiMeshInstance3D.new()
+	stones.multimesh = sm
+	stones.custom_aabb = arrows.custom_aabb
+	add_child(stones)
 
 	marker = MeshInstance3D.new()
 	var cyl := CylinderMesh.new()
@@ -184,6 +288,7 @@ func _process(delta: float) -> void:
 			_sync_view(false)
 			since_tick = acc
 			_spawn_shots()
+			_spawn_corpses()
 		else:
 			since_tick += delta * speed
 		# extrapolação visual entre ticks
@@ -194,6 +299,7 @@ func _process(delta: float) -> void:
 			elif u.state == 1:
 				(nodes[k] as Node3D).position = Vector3(u.vel.x, 0.0, u.vel.y) * (since_tick + (sim.tick_n - u.rout_stamp) * Cfg.TICK)
 	_update_arrows(delta * (0.0 if paused else speed))
+	_event_sounds()
 	_combat_sound(delta)
 	if marker_t > 0.0:
 		marker_t -= delta
@@ -204,7 +310,41 @@ func _process(delta: float) -> void:
 		hud.show_result()
 		sfx.play("win" if sim.winner == 0 else "lose")
 
-## Som de espadas enquanto houver corpo a corpo; mais unidades em contato, mais alto.
+## Voz da ordem de ataque: sorteia uma das unidades selecionadas. Carros, arqueiros e
+## infantaria pesada têm voz própria em 10% das vezes; as demais usam "ataquem" em 10%.
+## Nas outras vezes toca o som de combate normal.
+func _attack_sound() -> void:
+	var u: Unit = selected[randi() % selected.size()]
+	var own := {Cfg.CHARIOT: "carruagens", Cfg.ARCHER: "arqueiros", Cfg.HEAVY: "infantaria-pesada"}
+	var voice: String = own.get(u.type, "ataquem")
+	sfx.play(voice if randf() < 0.1 else "sword")
+
+## Vozes dos eventos da simulação (pânico das tropas do jogador).
+func _event_sounds() -> void:
+	for e: Array in sim.events:
+		if e[0] == "rout" and (e[1] as Unit).side == 0:
+			if (e[1] as Unit).is_general:
+				sfx.play_any(["fuga-general", "fuga-general2"])
+			else:
+				sfx.play_any(["fuga1", "fuga2"])
+	sim.events.clear()
+
+## O general tenta parar a debandada (uma vez por minuto).
+func cmd_rally() -> void:
+	var g: Unit = null
+	for u: Unit in sim.units:
+		if u.side == 0 and u.is_general:
+			g = u
+	if g == null or not g.general_alive or g.state != 0:
+		sim.messages.append(["O general não pode reunir as tropas agora.", 0])
+		return
+	if not sim.rally(g):
+		sim.messages.append(["O general só poderá reunir as tropas de novo em %d s." % int(ceil(g.rally_ready - sim.time)), 0])
+		return
+	sfx.play("reunir")
+
+## Choques de armas durante o corpo a corpo: um som sorteado a cada intervalo curto,
+## mais alto quanto mais unidades estiverem em contato.
 func _combat_sound(delta: float) -> void:
 	if paused or ended:
 		return
@@ -217,9 +357,8 @@ func _combat_sound(delta: float) -> void:
 			n += 1
 	if n == 0:
 		return
-	if not sfx.playing("sword"):
-		sfx.play("sword", -14.0 + minf(n, 8) * 1.5)
-	fight_t = 1.0
+	sfx.play("choque%d" % (1 + randi() % 6), -18.0 + minf(n, 8) * 1.5)
+	fight_t = randf_range(0.35, 0.8)
 
 func _sync_view(force: bool) -> void:
 	for k in nodes.size():
@@ -273,6 +412,41 @@ func _sync_view(force: bool) -> void:
 		mm.visible_instance_count = u.n
 		bufs[k] = buf
 
+## Desenha os soldados mortos neste intervalo: corpo deitado e poça de sangue no chão.
+## Eles não existem na simulação, então não bloqueiam nem são atingidos.
+func _spawn_corpses() -> void:
+	var n := sim.death_pos.size()
+	if n == 0:
+		return
+	for i in n:
+		var p: Vector2 = sim.death_pos[i]
+		var key: int = sim.death_key[i]
+		var h := terrain.height(p.x, p.y)
+		var yaw := randf() * TAU
+		var body: Basis
+		var lift := 0.3
+		if key % 10 == Cfg.CHARIOT:
+			body = Basis(Vector3.UP, yaw) * Basis(Vector3.BACK, PI * 0.45)   # carro tombado de lado
+			lift = 0.8
+		else:
+			body = Basis(Vector3.UP, yaw) * Basis(Vector3.RIGHT, -PI * 0.5)
+		var c: Array = corpses[key]
+		var cm: MultiMesh = c[0]
+		cm.set_instance_transform(c[1] % Cfg.CORPSE_CAP, Transform3D(body, Vector3(p.x, h + lift, p.y)))
+		c[1] += 1
+		cm.visible_instance_count = mini(c[1], Cfg.CORPSE_CAP)
+		var g := terrain.grad_at(p)
+		var r := randf_range(1.4, 2.4)
+		var bb := Basis(Vector3(r, r * g.x, 0), Vector3(0, 1, 0), Vector3(0, r * g.y, r))
+		var slot := blood_n % Cfg.BLOOD_CAP
+		var bo := Vector3(p.x, h + 0.15, p.y)
+		blood_mm.set_instance_transform(slot, Transform3D(_blood_basis(bb, BLOOD_START), bo))
+		blood_grow.append([slot, bb, bo, 0.0])
+		blood_n += 1
+	blood_mm.visible_instance_count = mini(blood_n, Cfg.BLOOD_CAP)
+	sim.death_pos.clear()
+	sim.death_key.clear()
+
 ## Transformação do nó de uma unidade sob controle: leva a pose em que o buffer foi
 ## gravado até a pose atual (movimento rígido da formação) e assenta os soldados no
 ## plano tangente ao terreno. Assim, unidades em marcha não regravam o buffer.
@@ -294,25 +468,47 @@ func _spawn_shots() -> void:
 		var b: Vector2 = sh[1]
 		var a3 := Vector3(a.x, terrain.height(a.x, a.y) + 1.5, a.y)
 		var b3 := Vector3(b.x, terrain.height(b.x, b.y) + 1.0, b.y)
-		for k in 6:
-			if arrow_list.size() >= 240:
+		var lst: Array = stone_list if int(sh[3]) == Cfg.SLINGER else arrow_list
+		for k in SHOTS_PER_VOLLEY:
+			if lst.size() >= SHOT_MAX:
 				break
-			var off := Vector3(randf_range(-12, 12), 0, randf_range(-12, 12))
-			arrow_list.append([a3 + off, b3 + off * 1.3, 0.0, float(sh[2])])
+			var off := Vector3(randf_range(-14, 14), 0, randf_range(-14, 14))
+			lst.append([a3 + off, b3 + off * 1.3, 0.0, float(sh[2])])
 	sim.shots.clear()
 
-func _update_arrows(dt: float) -> void:
-	var mm := arrows.multimesh
-	var k := arrow_list.size() - 1
+## Escala só o plano da mancha (x e z); a espessura (y) fica fixa.
+func _blood_basis(bb: Basis, s: float) -> Basis:
+	return Basis(bb.x * s, bb.y, bb.z * s)
+
+## Faz as manchas recentes crescerem até o tamanho final em BLOOD_GROW_T segundos.
+func _update_blood(dt: float) -> void:
+	var k := blood_grow.size() - 1
 	while k >= 0:
-		var a: Array = arrow_list[k]
+		var e: Array = blood_grow[k]
+		e[3] = float(e[3]) + dt
+		var f := minf(float(e[3]) / BLOOD_GROW_T, 1.0)
+		var s := BLOOD_START + (1.0 - BLOOD_START) * (1.0 - (1.0 - f) * (1.0 - f))
+		blood_mm.set_instance_transform(int(e[0]), Transform3D(_blood_basis(e[1], s), e[2]))
+		if f >= 1.0:
+			blood_grow.remove_at(k)
+		k -= 1
+
+func _update_arrows(dt: float) -> void:
+	_update_blood(dt)
+	_update_shot_list(arrows.multimesh, arrow_list, dt)
+	_update_shot_list(stones.multimesh, stone_list, dt)
+
+func _update_shot_list(mm: MultiMesh, list: Array, dt: float) -> void:
+	var k := list.size() - 1
+	while k >= 0:
+		var a: Array = list[k]
 		a[2] = float(a[2]) + dt
 		if float(a[2]) >= float(a[3]):
-			arrow_list.remove_at(k)
+			list.remove_at(k)
 		k -= 1
-	mm.visible_instance_count = arrow_list.size()
-	for i in arrow_list.size():
-		var a: Array = arrow_list[i]
+	mm.visible_instance_count = list.size()
+	for i in list.size():
+		var a: Array = list[i]
 		var f: float = float(a[2]) / float(a[3])
 		var p0: Vector3 = a[0]
 		var p1: Vector3 = a[1]
@@ -370,19 +566,20 @@ func _prune() -> void:
 	selected = selected.filter(func(u): return u.state == 0)
 
 func cmd_run_toggle() -> void:
-	sfx.play("menu", -6.0)
 	_prune()
 	if selected.is_empty():
 		return
 	var run: bool = not (selected[0] as Unit).running
 	for u: Unit in selected:
 		u.running = run
+	sfx.play("correr" if run else "andar")
 
 func cmd_halt() -> void:
-	sfx.play("menu", -6.0)
 	_prune()
 	for u: Unit in selected:
 		sim.order_halt(u)
+	if not selected.is_empty():
+		sfx.play("parar")
 
 func cmd_fire_toggle() -> void:
 	sfx.play("menu", -6.0)
@@ -418,6 +615,8 @@ func _unhandled_input(ev: InputEvent) -> void:
 		var k := (ev as InputEventKey).keycode
 		if k == KEY_R:
 			cmd_run_toggle()
+		elif k == KEY_G:
+			cmd_rally()
 		elif k == KEY_H:
 			cmd_halt()
 		elif k == KEY_F:
@@ -445,70 +644,131 @@ func _own_banner_at(screen: Vector2) -> Unit:
 			best = u
 	return best
 
-func _enemy_at(screen: Vector2, ground) -> Unit:
+## Unidade inimiga cujo estandarte (34 x 18 px, com 4 px de folga) está sob o ponto da tela.
+## Só o estandarte conta: clicar nos soldados não escolhe alvo.
+func _enemy_at(screen: Vector2) -> Unit:
 	var best: Unit = null
-	var bd := 26.0
+	var bd := 1e9
 	for u: Unit in sim.units:
 		if u.side == 0 or u.state == 2:
 			continue
 		var sp = hud.banner_pos.get(u)
-		if sp != null and (sp as Vector2).distance_to(screen) < bd:
-			bd = (sp as Vector2).distance_to(screen)
+		if sp == null:
+			continue
+		var d: Vector2 = (screen - (sp as Vector2)).abs()
+		if d.x <= 21.0 and d.y <= 13.0 and d.length() < bd:
+			bd = d.length()
 			best = u
-	if best == null and ground != null:
-		var gd := 1e9
-		for u: Unit in sim.units:
-			if u.side == 0 or u.state == 2:
-				continue
-			var d: float = u.center.distance_to(ground)
-			if d < u.brad * 0.8 and d < gd:
-				gd = d
-				best = u
 	return best
 
 func _issue_order(release: Vector2) -> void:
 	_prune()
 	if selected.is_empty():
 		return
-	var enemy := _enemy_at(rc_start, rc_ground)
+	var enemy := _enemy_at(rc_start)
 	if enemy != null:
 		for u: Unit in selected:
 			sim.order_attack(u, enemy, u.running)
-		sfx.play("sword")
+		_attack_sound()
 		_flash(enemy.center)
 		return
 	if rc_ground == null:
 		return
-	var dest: Vector2 = rc_ground
+	var dest: Vector2 = drag_center(release)
 	var facing := drag_facing(release)
 	sfx.play("march")
-	var slots := move_slots(dest)
+	var width := drag_width(release) if facing != Vector2.ZERO else 0.0
+	var files: Array = plan_files(width) if width > 0.0 else []
+	var slots := move_slots(dest, facing, files)
 	for i in selected.size():
+		if not files.is_empty():
+			sim.order_reform(selected[i], files[i])
 		sim.order_move(selected[i], slots[i], facing, (selected[i] as Unit).running)
 	var lim := Cfg.CONTROL_HALF - 25.0
 	_flash(Vector2(clampf(dest.x, -lim, lim), clampf(dest.y, -lim, lim)))
 
-## Direção da frente dada arrastando o botão direito (ZERO se não houve arrasto).
+## Frente dada arrastando o botão direito: perpendicular à linha arrastada, de modo que,
+## arrastando da esquerda para a direita, as unidades olhem para "cima" (ZERO se não houve arrasto).
 func drag_facing(release: Vector2) -> Vector2:
 	if rc_ground == null or rc_start.distance_to(release) <= 14.0:
 		return Vector2.ZERO
 	var g2 = rig.pick(release)
 	if g2 != null and (g2 as Vector2).distance_to(rc_ground) > 3.0:
-		return ((g2 as Vector2) - (rc_ground as Vector2)).normalized()
+		var d := ((g2 as Vector2) - (rc_ground as Vector2)).normalized()
+		return Vector2(d.y, -d.x)
 	return Vector2.ZERO
 
-## Posição de destino de cada unidade selecionada (mesma ordem de `selected`) para uma
-## ordem de mover até `dest`, mantendo a disposição relativa das unidades.
-func move_slots(dest: Vector2) -> Array:
+## Centro da linha: o ponto inicial, ou o meio da linha arrastada no modo de largura.
+func drag_center(release: Vector2) -> Vector2:
+	if drag_width(release) > 0.0:
+		return ((rig.pick(release) as Vector2) + (rc_ground as Vector2)) * 0.5
+	return rc_ground
+
+## Largura da linha escolhida arrastando mais que Cfg.WIDTH_DRAG_PX: distância no chão entre
+## o ponto de partida e o mouse, em metros (0 se não estiver no modo de largura).
+func drag_width(release: Vector2) -> float:
+	if rc_ground == null or rc_start.distance_to(release) <= Cfg.WIDTH_DRAG_PX:
+		return 0.0
+	var g2 = rig.pick(release)
+	if g2 == null:
+		return 0.0
+	return (g2 as Vector2).distance_to(rc_ground)
+
+const LINE_GAP := 8.0   # folga entre unidades lado a lado, em metros
+
+## Soldados na frente de cada unidade selecionada (mesma ordem de `selected`) para uma linha
+## de `width` metros no total: a largura é repartida na proporção dos soldados de cada
+## unidade, respeitando o mínimo de Cfg.MIN_LINE_FILES.
+func plan_files(width: float) -> Array:
 	var out: Array = []
-	if selected.is_empty():
+	var tot_n := 0
+	for u: Unit in selected:
+		tot_n += u.n
+	var usable := maxf(width - LINE_GAP * (selected.size() - 1), 0.0)
+	for u: Unit in selected:
+		var w := usable * float(u.n) / maxf(tot_n, 1)
+		var nf := int(round(w / float(u.t.spacing)))
+		out.append(clampi(nf, mini(Cfg.MIN_LINE_FILES, u.n), u.n))
+	return out
+
+## Posição de destino de cada unidade selecionada (mesma ordem de `selected`) para uma
+## ordem de mover até `dest`. Sem `facing`, mantém a disposição relativa atual; com
+## `facing`, forma uma linha de frente lado a lado, perpendicular à frente e centrada
+## em `dest`, preservando a ordem esquerda-direita atual das unidades. `files` (opcional)
+## traz a largura planejada de cada unidade (ver plan_files).
+func move_slots(dest: Vector2, facing := Vector2.ZERO, files: Array = []) -> Array:
+	var out: Array = []
+	var n := selected.size()
+	if n == 0:
 		return out
-	var cen := Vector2.ZERO
-	for u: Unit in selected:
-		cen += u.center
-	cen /= selected.size()
-	for u: Unit in selected:
-		out.append(dest + (u.center - cen).limit_length(350.0))
+	if facing == Vector2.ZERO or n == 1 and files.is_empty():
+		var cen := Vector2.ZERO
+		for u: Unit in selected:
+			cen += u.center
+		cen /= n
+		for u: Unit in selected:
+			out.append(dest + (u.center - cen).limit_length(350.0))
+		return out
+	var r := Vector2(-facing.y, facing.x)
+	var order: Array = range(n)
+	order.sort_custom(func(a, b): return (selected[a] as Unit).center.dot(r) < (selected[b] as Unit).center.dot(r))
+	var widths: Array = []
+	var total := 0.0
+	for i in n:
+		var u: Unit = selected[i]
+		var nf: int = files[i] if not files.is_empty() else u.files
+		var w: float = nf * float(u.t.spacing) + LINE_GAP
+		widths.append(w)
+		total += w
+	out.resize(n)
+	var x := -total * 0.5
+	for i: int in order:
+		var u: Unit = selected[i]
+		var nf: int = files[i] if not files.is_empty() else u.files
+		var rows := (u.n + nf - 1) / nf
+		var hd: float = maxf(float(rows) * float(u.t.spacing) * 0.5, 3.0)
+		out[i] = dest + r * (x + widths[i] * 0.5) - facing * hd
+		x += widths[i]
 	return out
 
 func _flash(p: Vector2) -> void:

@@ -31,6 +31,11 @@ func run() -> int:
 	_test_height(terrain)
 	_test_general(terrain)
 	_test_clamp(terrain)
+	_test_reform(terrain)
+	_test_rally(terrain)
+	_test_deaths(terrain)
+	_test_daylight()
+	_test_detour(terrain)
 	_test_battle(terrain)
 	print("FALHAS: ", fails)
 	return fails
@@ -123,6 +128,124 @@ func _test_general(terrain) -> void:
 		if c.state == 2:
 			break
 	check(c.state == 2 and s2.fled[0] == 100 and absf(c.center.x) + absf(c.center.y) > Cfg.CONTROL_HALF, "fugitivos saem do mapa (%d saíram)" % s2.fled[0])
+
+func _test_reform(terrain) -> void:
+	print("[mudança de largura da formação]")
+	var s := new_sim(terrain)
+	var u := s.add_unit(0, Cfg.HEAVY, 300, false)
+	s.place_unit(u, Vector2(-900, -900), Vector2(0, -1))
+	s.finalize()
+	var n0 := u.n
+	s.order_reform(u, 3)
+	check(u.files == mini(Cfg.MIN_LINE_FILES, n0), "largura mínima de %d soldados é respeitada (files=%d)" % [Cfg.MIN_LINE_FILES, u.files])
+	s.order_reform(u, 40)
+	check(u.files == 40 and u.rows0 == (n0 + 39) / 40, "largura 40 aplicada (files=%d, fileiras=%d)" % [u.files, u.rows0])
+	var sum := 0
+	for d in u.depth:
+		sum += d
+	check(sum == n0 and u.depth.size() == 40, "fileiras somam todos os soldados")
+	for k in 400:
+		s.tick(Cfg.TICK)
+	var ok := true
+	for i in range(u.start, u.start + u.n):
+		if s.pos[i].distance_to(u.center) > 60.0:
+			ok = false
+	check(ok and u.n == n0, "soldados se reagrupam no novo posto sem se perder")
+
+func _test_rally(terrain) -> void:
+	print("[general reúne as tropas]")
+	var s := new_sim(terrain)
+	var g := s.add_unit(0, Cfg.HEAVY, 200, true)
+	var near := s.add_unit(0, Cfg.LIGHT, 100, false)
+	var far := s.add_unit(0, Cfg.LIGHT, 100, false)
+	var enemy := s.add_unit(1, Cfg.HEAVY, 100, false)
+	s.place_unit(g, Vector2(-900, -900), Vector2(0, -1))
+	s.place_unit(near, Vector2(-800, -900), Vector2(0, -1))
+	s.place_unit(far, Vector2(-100, -900), Vector2(0, -1))
+	s.place_unit(enemy, Vector2(900, 900), Vector2(0, 1))
+	s.finalize()
+	near.morale = 20.0
+	far.morale = 20.0
+	s._start_rout(near)
+	check(near.state == 1, "unidade próxima entrou em fuga")
+	check(s.events.size() == 1 and s.events[0][0] == "rout", "pânico gera evento")
+	check(s.rally(g), "general consegue reunir")
+	check(near.state == 0 and near.morale > Cfg.ROUT_MORALE, "unidade próxima para de fugir com moral acima do limite de pânico")
+	check(far.morale > 20.0 and far.morale < 20.0 + Cfg.RALLY_NEAR_GAIN, "unidade distante ganha pouca moral")
+	check(not s.rally(g), "reunir fica em espera")
+	for k in int(Cfg.RALLY_COOLDOWN / Cfg.TICK) + 5:
+		s.tick(Cfg.TICK)
+	check(near.state == 0 and near.n > 0, "unidade reunida continua sob controle")
+	check(s.rally(g), "reunir disponível de novo após um minuto")
+
+func _test_deaths(terrain) -> void:
+	print("[registro de mortes para os corpos]")
+	var s := new_sim(terrain)
+	var u := s.add_unit(0, Cfg.CHARIOT, 20, false)
+	s.place_unit(u, Vector2(-900, -900), Vector2(0, -1))
+	s.finalize()
+	var n0 := u.n
+	s.kill_model(u, u.start)
+	check(s.death_pos.is_empty(), "sem gravação ligada, nada é registrado")
+	s.record_deaths = true
+	var p: Vector2 = s.pos[u.start + 3]
+	s.kill_model(u, u.start + 3)
+	check(s.death_pos.size() == 1 and s.death_key[0] == Cfg.CHARIOT and s.death_pos[0].is_equal_approx(p), "morte registra posição e tipo")
+	check(u.n == n0 - 2, "o morto sai da simulação")
+
+func _test_daylight() -> void:
+	print("[sol]")
+	var D = load("res://scripts/daylight.gd")
+	var am: Dictionary = D.at(8.0)
+	var noon: Dictionary = D.at(12.0)
+	var pm: Dictionary = D.at(16.0)
+	check((noon.to_sun as Vector3).y > (am.to_sun as Vector3).y, "sol mais alto ao meio-dia que às 8h")
+	check((am.to_sun as Vector3).x > 0.3 and (pm.to_sun as Vector3).x < -0.3, "sol a leste de manhã e a oeste à tarde")
+	check((noon.to_sun as Vector3).z > 0.0, "ao meio-dia o sol está ao sul (z positivo)")
+	check(absf((noon.to_sun as Vector3).length() - 1.0) < 0.001, "direção do sol normalizada")
+	check(D.at(6.0).alt >= Cfg.SUN_MIN_ALT - 0.01, "altura mínima respeitada")
+	check((noon.sun_color as Color).b > (am.sun_color as Color).b, "luz mais quente de manhã")
+
+func _test_detour(terrain) -> void:
+	print("[desvio em volta de outras unidades]")
+	var s := new_sim(terrain)
+	var a := s.add_unit(0, Cfg.LIGHT, 100, false)
+	var b := s.add_unit(0, Cfg.HEAVY, 200, false)
+	s.place_unit(a, Vector2(-900, -900), Vector2(1, 0))
+	s.place_unit(b, Vector2(-700, -900), Vector2(1, 0))
+	s.finalize()
+	s.order_move(a, Vector2(-500, -900), Vector2(1, 0), false)
+	check(not a.thru, "desvio pequeno: contorna em vez de atravessar")
+	check(a.path.size() >= 2, "o caminho dá a volta (mais de um ponto)")
+	var inside := false
+	var c := a.center
+	for p in a.path:
+		for k in 21:
+			var q := c.lerp(p, k / 20.0)
+			if s._rects_touch_at(q, a, b, 0.0):
+				inside = true
+		c = p
+	check(not inside, "o caminho não entra na formação da outra unidade")
+	var reached := false
+	for k in 4000:
+		s.tick(Cfg.TICK)
+		if a.path.is_empty():
+			reached = true
+			break
+	check(reached, "chega ao destino sem ficar presa")
+	check(a.center.distance_to(Vector2(-500, -900)) < 40.0, "chega perto do destino")
+	# só 2 pontos de passagem possíveis: cercar o destino exige desvio enorme -> atravessa
+	var s2 := new_sim(terrain)
+	var m := s2.add_unit(0, Cfg.LIGHT, 100, false)
+	s2.place_unit(m, Vector2(-900, -900), Vector2(1, 0))
+	var wall: Array = []
+	for k in 18:
+		var w := s2.add_unit(0, Cfg.HEAVY, 300, false)
+		s2.place_unit(w, Vector2(-700, -1300 + k * 70), Vector2(1, 0))
+		wall.append(w)
+	s2.finalize()
+	s2.order_move(m, Vector2(-500, -900), Vector2(1, 0), false)
+	check(m.thru, "desvio grande demais: passa por entre as unidades")
 
 func _test_clamp(terrain) -> void:
 	print("[limite da área controlável]")

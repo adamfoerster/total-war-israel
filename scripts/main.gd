@@ -7,6 +7,7 @@ const Battle = preload("res://scripts/battle.gd")
 var setup: Control
 var battle: Node3D
 var last_army: Array = []
+var last_hour := 10.0
 
 func _ready() -> void:
 	if "--simtest" in OS.get_cmdline_user_args():
@@ -62,14 +63,17 @@ func _show_setup() -> void:
 		battle = null
 	setup = SetupScreen.new()
 	setup.initial_army = last_army
+	setup.initial_hour = last_hour
 	setup.start_battle.connect(_start)
 	add_child(setup)
 
-func _start(army: Array) -> void:
+func _start(army: Array, hour: float) -> void:
 	last_army = army
+	last_hour = hour
 	setup.queue_free()
 	setup = null
 	battle = Battle.new()
 	battle.army = army
+	battle.hour = hour
 	battle.finished.connect(_show_setup)
 	add_child(battle)

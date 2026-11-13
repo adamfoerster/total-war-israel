@@ -41,7 +41,11 @@ var tick_n := 0
 var time := 0.0
 var winner := -1
 var messages: Array = []           # [texto, lado]
-var shots: Array = []              # visuais: [de, para, tempo de voo]
+var events: Array = []             # [tipo, unidade] para a camada de som; quem consome limpa
+var record_deaths := false          # a cena liga: guarda onde cada soldado morreu
+var death_pos := PackedVector2Array()   # visual: posição de cada morte; quem consome limpa
+var death_key := PackedInt32Array()     # lado * 10 + tipo, paralelo a death_pos
+var shots: Array = []            # visuais: [de, para, tempo de voo, tipo da unidade]
 var volleys: Array = []            # [t_impacto, alvo, acertos]
 var losses := [0, 0]
 var fled := [0, 0]
@@ -207,8 +211,140 @@ func order_move(u: Unit, dest: Vector2, facing: Vector2, run: bool) -> void:
 	u.running = run
 	u.dest_facing = facing
 	dest = reachable(dest, u)
-	u.path = terrain.find_path(u.center, dest, u.type == Cfg.CHARIOT)
+	u.path = plan_path(u, dest, null)
 	u.path_i = 0
+	u.blocked_t = 0.0
+	u.replan_at = Cfg.BLOCK_REPLAN
+
+## Caminho de u até `dest` dando a volta nas outras unidades (exceto `exclude`). Se o desvio
+## for muito maior que o caminho direto, ou não existir, devolve o direto e marca u.thru:
+## nesse caso a unidade passa por entre as outras.
+func plan_path(u: Unit, dest: Vector2, exclude) -> PackedVector2Array:
+	var chariot := u.type == Cfg.CHARIOT
+	u.thru = false
+	var cells := _obstacle_cells(u, exclude, u.center, dest)
+	if cells.is_empty():
+		return terrain.find_path(u.center, dest, chariot)
+	var around: PackedVector2Array = terrain.find_path_blocked(u.center, dest, chariot, cells)
+	var straight := u.center.distance_to(dest)
+	if not around.is_empty():
+		var la := _path_len(u.center, around)
+		if la <= straight * 1.3 + 40.0:
+			return around
+		var direct: PackedVector2Array = terrain.find_path(u.center, dest, chariot)
+		if la <= _path_len(u.center, direct) * Cfg.DETOUR_RATIO + Cfg.DETOUR_ADD:
+			return around
+		u.thru = true
+		return direct
+	u.thru = true
+	return terrain.find_path(u.center, dest, chariot)
+
+func _path_len(from: Vector2, path: PackedVector2Array) -> float:
+	var l := 0.0
+	var c := from
+	for p in path:
+		l += c.distance_to(p)
+		c = p
+	return l
+
+## Células da grade de navegação ocupadas pelas formações das outras unidades, com folga
+## para a largura de u. Ignora as células perto da origem e do destino.
+func _obstacle_cells(u: Unit, exclude, a: Vector2, b: Vector2) -> Array:
+	var out: Array = []
+	var seen := {}
+	var m := minf(maxf(u.files * float(u.t.spacing), u.rows() * float(u.t.spacing)) * 0.5, 30.0) + 2.0
+	var cell := Cfg.NAV_CELL
+	for o: Unit in units:
+		if o == u or is_same(o, exclude) or o.state != 0 or o.n == 0:
+			continue
+		var sp: float = o.t.spacing
+		var hw := o.files * sp * 0.5 + m + cell * 0.5
+		var hd := o.rows() * sp * 0.5 + m + cell * 0.5
+		var f := o.facing
+		var r := Vector2(-f.y, f.x)
+		var ext := absf(r.x) * hw + absf(f.x) * hd
+		var exz := absf(r.y) * hw + absf(f.y) * hd
+		var c0: Vector2i = terrain._cell(o.center - Vector2(ext, exz))
+		var c1: Vector2i = terrain._cell(o.center + Vector2(ext, exz))
+		for cz in range(c0.y, c1.y + 1):
+			for cx in range(c0.x, c1.x + 1):
+				var wp := Vector2(-HALF + (cx + 0.5) * cell, -HALF + (cz + 0.5) * cell)
+				var d := wp - o.center
+				if absf(d.dot(r)) <= hw and absf(d.dot(f)) <= hd 						and wp.distance_squared_to(a) > 900.0 and wp.distance_squared_to(b) > 900.0:
+					var id := Vector2i(cx, cz)
+					if not seen.has(id):
+						seen[id] = true
+						out.append(id)
+	return out
+
+## Muda a largura da formação para `nf` soldados na frente (mínimo Cfg.MIN_LINE_FILES,
+## ou todos, se a unidade tiver menos). Os soldados mantêm a ordem (fileira, coluna) e
+## caminham até os novos postos.
+func order_reform(u: Unit, nf: int) -> void:
+	if u.state != 0 or u.n == 0:
+		return
+	nf = clampi(nf, mini(Cfg.MIN_LINE_FILES, u.n), u.n)
+	if nf == u.files:
+		return
+	_unform(u)
+	var order: Array = range(u.start, u.start + u.n)
+	order.sort_custom(func(a, b): return row_of[a] * 1000 + col_of[a] < row_of[b] * 1000 + col_of[b])
+	u.files = nf
+	u.rows0 = (u.n + nf - 1) / nf
+	u.depth.resize(nf)
+	u.depth.fill(0)
+	for j in order.size():
+		var i: int = order[j]
+		col_of[i] = j % nf
+		row_of[i] = j / nf
+		u.depth[j % nf] += 1
+	u.ragged = false
+	u.settling = true
+	u.dirty = true
+	if u.in_grid:
+		_wake_all(u)
+
+## O general tenta parar a debandada: tropas próximas ganham muito moral (e as que fugiam
+## voltam ao controle, de frente para o inimigo); as distantes ganham pouca. Uma vez por minuto.
+## Devolve false se não puder (sem general vivo e sob controle, ou em espera).
+func rally(g: Unit) -> bool:
+	if not g.is_general or not g.general_alive or g.state != 0 or time < g.rally_ready:
+		return false
+	g.rally_ready = time + Cfg.RALLY_COOLDOWN
+	var back := 0
+	for f: Unit in units:
+		if f.side != g.side or f.state == 2:
+			continue
+		var near := f.center.distance_to(g.center) <= Cfg.RALLY_NEAR
+		if f.state == 1:
+			if near and f.n > 0:
+				_stop_rout(f)
+				f.morale = minf(Cfg.ROUT_MORALE + Cfg.RALLY_NEAR_GAIN, f.morale_base)
+				back += 1
+			continue
+		var gain: float = Cfg.RALLY_NEAR_GAIN if near else Cfg.RALLY_FAR_GAIN
+		f.morale = minf(f.morale + gain, f.morale_base + 10.0)
+	messages.append(["O general de %s reúne as tropas!%s" % [Cfg.SIDE_NAMES[g.side], (" %d unidade(s) deixam de fugir." % back) if back > 0 else ""], g.side])
+	events.append(["rally", g])
+	return true
+
+## Fim da fuga: os soldados voltam a se alinhar nos postos, virados para o inimigo.
+func _stop_rout(u: Unit) -> void:
+	u.state = 0
+	u.rout_path = PackedVector2Array()
+	u.rout_blocked = false
+	u.vel = Vector2.ZERO
+	u.path = PackedVector2Array()
+	if u.flee_dir != Vector2.ZERO:
+		u.want_facing = -u.flee_dir
+	u.formed = false
+	u.settling = true
+	u.dirty = true
+	u.dense = true   # força passagem pela grade até se reorganizar
+	for i in range(u.start, u.start + u.n):
+		flag[i] = 1
+	if u.in_grid:
+		_wake_all(u)
 
 func order_attack(u: Unit, tg: Unit, run: bool) -> void:
 	if u.state != 0 or tg == null or tg.state == 2:
@@ -345,7 +481,11 @@ func _form_radius(u: Unit) -> float:
 
 ## Retângulos orientados das formações se tocam? (teste de eixos separadores)
 func _rects_touch(a: Unit, b: Unit, margin: float) -> bool:
-	var d := b.center - a.center
+	return _rects_touch_at(a.center, a, b, margin)
+
+## Mesmo teste com a unidade a posicionada em `ac`.
+func _rects_touch_at(ac: Vector2, a: Unit, b: Unit, margin: float) -> bool:
+	var d := b.center - ac
 	var ah := Vector2(a.files * float(a.t.spacing) * 0.5 + margin, a.rows() * float(a.t.spacing) * 0.5 + margin)
 	var bh := Vector2(b.files * float(b.t.spacing) * 0.5 + margin, b.rows() * float(b.t.spacing) * 0.5 + margin)
 	var af := a.facing
@@ -358,6 +498,18 @@ func _rects_touch(a: Unit, b: Unit, margin: float) -> bool:
 		if absf(d.dot(ax)) > pa + pb:
 			return false
 	return true
+
+## A formação de u, se fosse para `nc`, entraria na de outra unidade que ainda não a toca?
+func _path_blocked(u: Unit, nc: Vector2) -> bool:
+	for o: Unit in units:
+		if o == u or o.state != 0 or o.n == 0 or is_same(o, u.target):
+			continue
+		var rr := u.brad + o.brad + 20.0
+		if nc.distance_squared_to(o.center) > rr * rr:
+			continue
+		if _rects_touch_at(nc, u, o, 0.0) and not _rects_touch_at(u.center, u, o, 0.0):
+			return true
+	return false
 
 func _terrain_safe(u: Unit, lim: float) -> bool:
 	var r := u.brad + 8.0
@@ -508,7 +660,7 @@ func _advance_anchor(u: Unit, dt: float, spd_mult: float) -> bool:
 				u.repath_t -= dt
 				if u.path.is_empty() or u.repath_t <= 0.0:
 					u.repath_t = 1.0 + randf() * 0.5
-					u.path = terrain.find_path(u.center, tc, u.type == Cfg.CHARIOT)
+					u.path = plan_path(u, tc, tg)
 					u.path_i = 0
 	var moved := false
 	if not u.path.is_empty():
@@ -749,6 +901,10 @@ func _update_unit(u: Unit, dt: float) -> void:
 			if q2 == p or (q2 != q and _overlaps(gi, p, q2, myr, qr)):
 				ok = false
 			q = q2
+		# só anda quem tem espaço: um passo que não aproxima do posto (empurrão de vizinhos,
+		# desvio de declive) deixaria o soldado tremendo no lugar
+		if ok and best < 0 and (slot - q).length_squared() > l2 - 0.0004:
+			ok = false
 		if ok:
 			_set_pos(gi, q)
 			any = true
@@ -791,6 +947,9 @@ func kill_model(u: Unit, gi: int) -> void:
 	if u.n <= 0:
 		return
 	_unform(u)
+	if record_deaths:
+		death_pos.append(pos[gi])
+		death_key.append(u.side * 10 + u.type)
 	var ing := u.in_grid
 	var s := u.start
 	var last := s + u.n - 1
@@ -879,7 +1038,7 @@ func _try_fire(u: Unit) -> void:
 	var hits: float = u.n * float(u.t.acc) * (1.2 - 0.5 * dist / maxf(float(u.t.range), 1.0))
 	hits *= (1.0 + clampf(dh * 0.004, -0.15, 0.25)) * (1.0 - float(tg.t.armor)) * (0.7 + 0.3 * u.str_mult)
 	volleys.append([time + flight, tg, hits])
-	shots.append([u.center, tg.center, flight])
+	shots.append([u.center, tg.center, flight, u.type])
 
 func _update_volleys() -> void:
 	var k := volleys.size() - 1
@@ -997,6 +1156,7 @@ func _start_rout(u: Unit) -> void:
 		flag[i] = 1
 	_set_flee_dir(u)
 	messages.append(["%s entrou em pânico e foge!" % u.label, u.side])
+	events.append(["rout", u])
 	_shock(u, Cfg.SEE_ROUT_LOSS)
 	if u.is_general and u.general_alive:
 		_general_down(u, false)

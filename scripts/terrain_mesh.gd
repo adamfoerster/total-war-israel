@@ -8,9 +8,11 @@ static func build(terrain) -> ArrayMesh:
 	var verts := PackedVector3Array()
 	var norms := PackedVector3Array()
 	var cols := PackedColorArray()
+	var uvs := PackedVector2Array()   # x: parede rochosa, y: planura (vegetação), ver shaders/terrain.gdshader
 	verts.resize(n * n)
 	norms.resize(n * n)
 	cols.resize(n * n)
+	uvs.resize(n * n)
 	var h: PackedFloat32Array = terrain.h
 	var gx: PackedFloat32Array = terrain.gx
 	var gz: PackedFloat32Array = terrain.gz
@@ -37,7 +39,9 @@ static func build(terrain) -> ArrayMesh:
 			var noise := 0.94 + 0.12 * float((i * 73856093 ^ j * 19349663) & 255) / 255.0
 			if absf(x) > ctrl or absf(z) > ctrl:
 				noise *= 0.72
-			cols[k] = Color(c.r * noise, c.g * noise, c.b * noise)
+			cols[k] = Color(c.r, c.g, c.b, noise)
+			uvs[k] = Vector2(smoothstep(Cfg.SLOPE_ROCK - 2.0, Cfg.SLOPE_ROCK + 2.0, s),
+				1.0 - smoothstep(5.0, 11.0, s))
 	var idx := PackedInt32Array()
 	idx.resize((n - 1) * (n - 1) * 6)
 	var w := 0
@@ -56,13 +60,12 @@ static func build(terrain) -> ArrayMesh:
 	arr[Mesh.ARRAY_VERTEX] = verts
 	arr[Mesh.ARRAY_NORMAL] = norms
 	arr[Mesh.ARRAY_COLOR] = cols
+	arr[Mesh.ARRAY_TEX_UV] = uvs
 	arr[Mesh.ARRAY_INDEX] = idx
 	var mesh := ArrayMesh.new()
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
-	var m := StandardMaterial3D.new()
-	m.vertex_color_use_as_albedo = true
-	m.roughness = 1.0
-	m.specular_mode = BaseMaterial3D.SPECULAR_DISABLED
+	var m := ShaderMaterial.new()
+	m.shader = preload("res://shaders/terrain.gdshader")
 	mesh.surface_set_material(0, m)
 	return mesh
 

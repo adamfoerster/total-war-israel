@@ -9,6 +9,9 @@ const LON0 := 35.2365
 const Z := 13
 const TX0 := 4897
 const TY0 := 3332
+const SMOOTH_PASSES := 1      # antes eram 2
+const DETAIL_AMP := 6.0       # metros de relevo fino acrescentado
+const DETAIL_WAVE := 120.0    # comprimento de onda base do relevo fino, em metros
 
 func _init() -> void:
 	var mos := PackedFloat32Array()
@@ -48,13 +51,23 @@ func _init() -> void:
 			var k := iy * 512 + ix
 			out[j * N + i] = lerpf(lerpf(mos[k], mos[k + 1], fx), lerpf(mos[k + 512], mos[k + 513], fx), fy)
 	# suavização leve (remove degraus de reamostragem e ruído de edificações)
-	for pass_i in 2:
+	for pass_i in SMOOTH_PASSES:
 		var src := out.duplicate()
 		for j in range(1, N - 1):
 			for i in range(1, N - 1):
 				var k := j * N + i
 				out[k] = (src[k] * 4.0 + (src[k - 1] + src[k + 1] + src[k - N] + src[k + N]) * 2.0
 					+ src[k - N - 1] + src[k - N + 1] + src[k + N - 1] + src[k + N + 1]) / 16.0
+	# relevo fino que os tiles de ~19 m não trazem: ruído fractal de poucos metros
+	var fn := FastNoiseLite.new()
+	fn.seed = 7
+	fn.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
+	fn.fractal_type = FastNoiseLite.FRACTAL_FBM
+	fn.fractal_octaves = 3
+	fn.frequency = 1.0 / DETAIL_WAVE
+	for j in N:
+		for i in N:
+			out[j * N + i] += fn.get_noise_2d(i * CELL, j * CELL) * DETAIL_AMP
 	var img_out := Image.create_from_data(N, N, false, Image.FORMAT_RF, out.to_byte_array())
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path("res://assets"))
 	var err := ResourceSaver.save(img_out, "res://assets/jerusalem_height.res")

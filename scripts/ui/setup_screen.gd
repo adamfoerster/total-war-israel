@@ -1,13 +1,16 @@
 extends Control
 ## Tela de preparo: monta o exército (até 20 cards, 100–300 homens cada) e
-## escolhe qual card leva o general.
+## escolhe qual card leva o general e a hora do dia (posição do sol e sombras).
 
-signal start_battle(army)
+signal start_battle(army, hour)
 
 const Cfg = preload("res://scripts/config.gd")
 const Sfx = preload("res://scripts/sfx.gd")
+const Daylight = preload("res://scripts/daylight.gd")
 
 var initial_army: Array = []
+var initial_hour := Cfg.HOUR_DEFAULT
+var hour := Cfg.HOUR_DEFAULT
 var rows: Array = []          # [{type, men, general}]
 var list: VBoxContainer
 var summary: Label
@@ -40,6 +43,28 @@ func _ready() -> void:
 	sub.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	sub.add_theme_font_size_override("font_size", 14)
 	vb.add_child(sub)
+
+	var hr := HBoxContainer.new()
+	hr.add_theme_constant_override("separation", 12)
+	vb.add_child(hr)
+	var hl := Label.new()
+	hl.text = "Hora do dia"
+	hr.add_child(hl)
+	var hs := HSlider.new()
+	hs.min_value = Cfg.HOUR_MIN
+	hs.max_value = Cfg.HOUR_MAX
+	hs.step = 0.25
+	hs.value = initial_hour
+	hs.custom_minimum_size = Vector2(320, 0)
+	hs.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	hr.add_child(hs)
+	var hv := Label.new()
+	hr.add_child(hv)
+	hour = initial_hour
+	hv.text = "%s (%s)" % [Daylight.clock(hour), Daylight.period(hour)]
+	hs.value_changed.connect(func(v: float):
+		hour = v
+		hv.text = "%s (%s)" % [Daylight.clock(v), Daylight.period(v)])
 
 	var sc := ScrollContainer.new()
 	sc.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -154,7 +179,7 @@ func _summary() -> void:
 	add_btn.disabled = rows.size() >= Cfg.MAX_CARDS
 
 func _go() -> void:
-	sfx.play("march")
+	sfx.play("menu")
 	# exatamente um general
 	var has := false
 	for r: Dictionary in rows:
@@ -163,4 +188,4 @@ func _go() -> void:
 		has = has or r.general
 	if not has:
 		rows[0].general = true
-	start_battle.emit(rows.duplicate(true))
+	start_battle.emit(rows.duplicate(true), hour)
