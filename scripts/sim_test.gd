@@ -36,6 +36,7 @@ func run() -> int:
 	_test_deaths(terrain)
 	_test_daylight()
 	_test_detour(terrain)
+	_test_squeeze(terrain)
 	_test_battle(terrain)
 	print("FALHAS: ", fails)
 	return fails
@@ -246,6 +247,39 @@ func _test_detour(terrain) -> void:
 	s2.finalize()
 	s2.order_move(m, Vector2(-500, -900), Vector2(1, 0), false)
 	check(m.thru, "desvio grande demais: passa por entre as unidades")
+
+func _test_squeeze(terrain) -> void:
+	print("[estreitar a frente para passar por um vão]")
+	var s := new_sim(terrain)
+	var m := s.add_unit(0, Cfg.LIGHT, 100, false)
+	s.place_unit(m, Vector2(-900, -900), Vector2(1, 0))
+	var sp: float = m.t.spacing
+	var gap := 6.5 * sp   # cabem 6 soldados -> frente de 5
+	var walls: Array = []
+	for j in 6:
+		for sgn: float in [-1.0, 1.0]:
+			var w := s.add_unit(0, Cfg.HEAVY, 300, false)
+			walls.append([w, sgn, j])
+	for e: Array in walls:
+		var w: Unit = e[0]
+		var wh: float = w.files * float(w.t.spacing)
+		var z: float = -900.0 + float(e[1]) * (gap * 0.5 + wh * 0.5 + int(e[2]) * wh)
+		s.place_unit(w, Vector2(-700, z), Vector2(1, 0))
+	s.finalize()
+	s.order_reform(m, 20)
+	check(m.files == 20, "frente inicial de 20")
+	s.order_move(m, Vector2(-500, -900), Vector2(1, 0), false)
+	var minf := m.files
+	var reached := false
+	for k in 6000:
+		s.tick(Cfg.TICK)
+		minf = mini(minf, m.files)
+		if m.path.is_empty() and m.files_want == 0 and k > 100:
+			reached = true
+			break
+	check(minf == 5, "estreita para 5 soldados no vão de 6 (mínimo=%d)" % minf)
+	check(reached and m.center.x > -560.0, "passa pelo vão e chega ao destino (x=%.0f)" % m.center.x)
+	check(m.files == 20, "volta à frente de 20 depois do vão (files=%d)" % m.files)
 
 func _test_clamp(terrain) -> void:
 	print("[limite da área controlável]")

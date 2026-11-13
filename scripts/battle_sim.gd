@@ -225,6 +225,11 @@ func plan_path(u: Unit, dest: Vector2, exclude) -> PackedVector2Array:
 	var cells := _obstacle_cells(u, exclude, u.center, dest)
 	if cells.is_empty():
 		return terrain.find_path(u.center, dest, chariot)
+	if _straight_fits(u, u.center, dest, exclude):
+		# a reta passa por um vão onde a unidade cabe estreitando a frente
+		var direct0: PackedVector2Array = terrain.find_path(u.center, dest, chariot)
+		if direct0.size() <= 2:
+			return direct0
 	var around: PackedVector2Array = terrain.find_path_blocked(u.center, dest, chariot, cells)
 	var straight := u.center.distance_to(dest)
 	if not around.is_empty():
@@ -283,7 +288,13 @@ func _obstacle_cells(u: Unit, exclude, a: Vector2, b: Vector2) -> Array:
 func order_reform(u: Unit, nf: int) -> void:
 	if u.state != 0 or u.n == 0:
 		return
-	nf = clampi(nf, mini(Cfg.MIN_LINE_FILES, u.n), u.n)
+	u.files_want = 0
+	u.squeeze_vec = Vector2.ZERO
+	_set_files(u, clampi(nf, mini(Cfg.MIN_LINE_FILES, u.n), u.n))
+
+## Troca a largura sem limite mínimo de linha (usado também ao estreitar num vão).
+func _set_files(u: Unit, nf: int) -> void:
+	nf = clampi(nf, 1, maxi(u.n, 1))
 	if nf == u.files:
 		return
 	_unform(u)
@@ -685,6 +696,11 @@ func _advance_anchor(u: Unit, dt: float, spd_mult: float) -> bool:
 		else:
 			u.center += dir * step
 			want = dir
+		if u.squeeze_vec != Vector2.ZERO:
+			# centraliza a coluna estreitada no vão
+			var lv := u.squeeze_vec.limit_length(step * 0.5)
+			u.center += lv
+			u.squeeze_vec -= lv
 		u.center = _clamp_ctrl(u.center)
 		u.vel = dir * (step / dt)
 		moved = true
@@ -716,8 +732,124 @@ func _advance_anchor(u: Unit, dt: float, spd_mult: float) -> bool:
 		moved = true
 	return moved
 
+## Interseção do raio p + d·t com o retângulo da formação de o, aumentado de `grow`.
+## Devolve [entrada, saída] ou [] se não cruza.
+func _ray_rect(p: Vector2, d: Vector2, o: Unit, grow: float) -> Array:
+	var sp: float = o.t.spacing
+	var of := o.facing
+	var orr := Vector2(-of.y, of.x)
+	var rel := p - o.center
+	var tmin := -1e9
+	var tmax := 1e9
+	for ax: Vector2 in [orr, of]:
+		var h: float = (o.files if ax == orr else o.rows()) * sp * 0.5 + grow
+		var pp := rel.dot(ax)
+		var dd := d.dot(ax)
+		if absf(dd) < 1e-6:
+			if absf(pp) > h:
+				return []
+			continue
+		var t1 := (-h - pp) / dd
+		var t2 := (h - pp) / dd
+		tmin = maxf(tmin, minf(t1, t2))
+		tmax = minf(tmax, maxf(t1, t2))
+	if tmax < tmin:
+		return []
+	return [tmin, tmax]
+
+## Distância de p, na direção d, até a borda da formação mais próxima de `obs` (até `cap`).
+func _free_dist(p: Vector2, d: Vector2, cap: float, obs: Array) -> float:
+	var best := cap
+	for o: Unit in obs:
+		var hit := _ray_rect(p, d, o, 0.0)
+		if hit.is_empty() or float(hit[1]) < 0.0:
+			continue
+		best = minf(best, maxf(float(hit[0]), 0.0))
+	return best
+
+## A linha reta de a até b passa entre as outras unidades com folga para a frente mínima
+## de estreitamento? Ignora unidades que já cobrem a origem ou o destino.
+func _straight_fits(u: Unit, a: Vector2, b: Vector2, exclude) -> bool:
+	var l := a.distance_to(b)
+	if l < 1.0:
+		return true
+	var d := (b - a) / l
+	var grow := mini(Cfg.SQUEEZE_MIN_FILES + 1, u.n) * float(u.t.spacing) * 0.5
+	for o: Unit in units:
+		if o == u or is_same(o, exclude) or o.state != 0 or o.n == 0:
+			continue
+		var hit := _ray_rect(a, d, o, grow)
+		if hit.is_empty() or float(hit[1]) < 0.0 or float(hit[0]) > l:
+			continue
+		if float(hit[0]) <= 0.0 or float(hit[1]) >= l:
+			continue   # a origem ou o destino está colado nessa unidade
+		return false
+	return true
+
+## Estreita a frente para passar por um vão entre outras unidades e volta à largura
+## original depois. O vão é medido na retaguarda, no centro, na frente e um pouco adiante;
+## a nova frente é o número de soldados que cabem no vão menos um.
+func _update_squeeze(u: Unit, dt: float) -> void:
+	u.squeeze_t -= dt
+	if u.squeeze_t > 0.0:
+		return
+	u.squeeze_t = Cfg.SQUEEZE_CHECK + randf() * 0.2
+	var moving := not u.path.is_empty()
+	if u.contacts > 0 or (not moving and u.files_want == 0):
+		return
+	var base := u.files_want if u.files_want > 0 else u.files
+	var sp: float = u.t.spacing
+	var dir := u.facing
+	if moving:
+		var dv := u.path[u.path_i] - u.center
+		if dv.length_squared() > 0.01:
+			dir = dv.normalized()
+	var r := Vector2(-dir.y, dir.x)
+	var half := base * sp * 0.5 + sp
+	var hd := u.rows() * sp * 0.5
+	var reach := u.brad + half + hd + 40.0
+	var obs: Array = []
+	for o: Unit in units:
+		if o == u or o.state != 0 or o.n == 0 or is_same(o, u.target):
+			continue
+		var rr := reach + o.brad
+		if o.center.distance_squared_to(u.center) <= rr * rr:
+			obs.append(o)
+	var gap := 1e9
+	var off := 0.0
+	if not obs.is_empty():
+		var probes: Array = [-hd, 0.0, hd + sp]
+		if moving:
+			probes.append(hd + sp * 4.0 + 10.0)
+		for k: float in probes:
+			var p := u.center + dir * k
+			var lft := _free_dist(p, -r, half, obs)
+			var rgt := _free_dist(p, r, half, obs)
+			if lft + rgt < gap:
+				gap = lft + rgt
+				off = (rgt - lft) * 0.5
+	var nf := int(floor(gap / sp)) - 1 if gap < 1e8 else base
+	if nf >= base:
+		# caminho livre: volta à largura original
+		if u.files_want > 0:
+			_set_files(u, u.files_want)
+			u.files_want = 0
+			u.squeeze_vec = Vector2.ZERO
+		return
+	if nf < mini(Cfg.SQUEEZE_MIN_FILES, u.n):
+		return   # vão estreito demais: segue como antes (passa por entre as unidades)
+	if nf < u.files and moving:
+		if u.files_want == 0:
+			u.files_want = u.files
+		_set_files(u, nf)
+	elif nf > u.files and u.files_want > 0:
+		_set_files(u, nf)   # o vão abriu um pouco: alarga em parte
+	if u.files_want > 0 and moving:
+		u.squeeze_vec = r * off
+
 func _update_unit(u: Unit, dt: float) -> void:
 	var t := u.t
+	_update_squeeze(u, dt)
 	var spd_mult := 1.0 - 0.4 * u.fatigue * 0.01
 	var prevc := u.contacts
 	var anchor_moved := _advance_anchor(u, dt, spd_mult)

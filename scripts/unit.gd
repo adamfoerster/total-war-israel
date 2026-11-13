@@ -26,6 +26,9 @@ var thru := false          # caminho atravessa outras unidades (desvio grande de
 var blocked_t := 0.0       # tempo parada por outra unidade no caminho
 var replan_at := 1.0
 var files := 1
+var files_want := 0              # largura a restaurar após estreitar num vão (0 = não estreitada)
+var squeeze_t := 0.0             # tempo até a próxima medição do vão
+var squeeze_vec := Vector2.ZERO  # deslocamento lateral pendente para centralizar no vão
 var path := PackedVector2Array()
 var path_i := 0
 var target = null
