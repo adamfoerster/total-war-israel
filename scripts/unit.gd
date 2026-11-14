@@ -32,6 +32,8 @@ var target = null
 var repath_t := 0.0
 var running := false
 var fire_at_will := true
+var stance := 1           # Cfg.STANCE_DEFENSIVE / _NEUTRAL / _AGGRESSIVE
+var chase_ok := false     # o alvo já fugia quando foi dado: persegue mesmo fora do agressivo
 
 var state := 0        # 0 sob controle, 1 em fuga, 2 fora de combate
 var morale := 70.0

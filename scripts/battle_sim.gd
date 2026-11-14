@@ -283,12 +283,12 @@ func order_move(u: Unit, dest: Vector2, facing: Vector2, run: bool) -> void:
 	u.running = run
 	u.dest_facing = facing
 	dest = reachable(dest, u)
-	u.path = plan_path(u, dest, null)
+	u.path = plan_path(u, dest)
 	u.path_i = 0
 
-## Caminho de u até `dest`. Só o terreno conta como obstáculo: as outras unidades são
-## tratadas no caminho, estreitando a frente (_update_squeeze) e pela colisão na grade.
-func plan_path(u: Unit, dest: Vector2, _exclude) -> PackedVector2Array:
+## Caminho de u até `dest` numa ordem de movimento. Só o terreno conta como obstáculo: as
+## outras unidades (muitas vezes só de passagem) são tratadas no caminho, estreitando a frente (_update_squeeze) e pela colisão na grade.
+func plan_path(u: Unit, dest: Vector2) -> PackedVector2Array:
 	return terrain.find_path(u.center, dest, u.type == Cfg.CHARIOT)
 
 ## Muda a largura da formação para `nf` soldados na frente (mínimo Cfg.MIN_LINE_FILES,
@@ -370,6 +370,7 @@ func order_attack(u: Unit, tg: Unit, run: bool) -> void:
 	if u.state != 0 or tg == null or tg.state == 2:
 		return
 	u.target = tg
+	u.chase_ok = tg.state == 1
 	u.running = run
 	u.dest_facing = Vector2.ZERO
 	u.repath_t = 0.0
@@ -391,6 +392,21 @@ func nearest_enemy(u: Unit, only_ok: bool) -> Unit:
 			bd = d
 			best = e
 	return best
+
+## Ataque automático pela postura: unidade parada, sem alvo, com inimigo a menos de
+## Cfg.STANCE_ENGAGE m (borda a borda). `e` é o inimigo sob controle mais próximo; a
+## agressiva também pega quem foge. Atiradores com munição não avançam: já atiram à vontade.
+func _auto_engage(u: Unit, e: Unit) -> void:
+	if u.stance == Cfg.STANCE_DEFENSIVE or u.target != null or not u.path.is_empty():
+		return
+	if float(u.t.range) > 0.0 and u.ammo > 0:
+		return
+	if u.stance == Cfg.STANCE_AGGRESSIVE:
+		e = nearest_enemy(u, false)
+	if e == null:
+		return
+	if u.center.distance_to(e.center) - u.brad - e.brad < Cfg.STANCE_ENGAGE:
+		order_attack(u, e, u.running)
 
 func controlled(side: int) -> int:
 	var c := 0
@@ -660,7 +676,9 @@ func _advance_anchor(u: Unit, dt: float, spd_mult: float) -> bool:
 	var want := Vector2.ZERO
 	if u.target != null:
 		var tg: Unit = u.target
-		if tg.state == 2 or tg.n == 0:
+		if tg.state == 2 or tg.n == 0 \
+				or (tg.state == 1 and u.stance != Cfg.STANCE_AGGRESSIVE and not u.chase_ok):
+			# fora do agressivo não persegue quem passou a fugir
 			u.target = null
 			u.path = PackedVector2Array()
 		else:
@@ -681,7 +699,7 @@ func _advance_anchor(u: Unit, dt: float, spd_mult: float) -> bool:
 				u.repath_t -= dt
 				if u.path.is_empty() or u.repath_t <= 0.0:
 					u.repath_t = 1.0 + randf() * 0.5
-					u.path = plan_path(u, tc, tg)
+					u.path = plan_attack_path(u, tc, tg)
 					u.path_i = 0
 	var moved := false
 	if not u.path.is_empty():
@@ -1159,6 +1177,8 @@ func _try_fire(u: Unit) -> void:
 		for e: Unit in units:
 			if e.side == u.side or e.state == 2 or e.n == 0:
 				continue
+			if u.stance == Cfg.STANCE_DEFENSIVE and not is_same(e.target, u):
+				continue   # defensiva só atira em quem a ataca
 			var d := u.center.distance_to(e.center)
 			var sc := d + (60.0 if e.state == 1 else 0.0)
 			if sc < bd and d <= eff_range(u, e):
@@ -1215,6 +1235,7 @@ func _update_morale(dt: float) -> void:
 			m -= float(u.lost_acc) / u.men_init * 110.0
 			u.lost_acc = 0
 		var e := nearest_enemy(u, true)
+		_auto_engage(u, e)
 		var dist := 1e9
 		u.height_mod = 1.0
 		if e != null:
@@ -1474,3 +1495,84 @@ func _check_victory() -> void:
 		winner = 1
 	elif b == 0:
 		winner = 0
+
+## Caminho de u até o alvo que persegue, dando a volta nas outras unidades (exceto o próprio
+## alvo, `exclude`). Recalculado a cada 1 a 1,5 s, então só contorna quem está no caminho
+## agora. Atravessar as outras custaria caro: os soldados delas entrariam na grade. Se o
+## desvio for muito maior que o caminho direto, ou não existir, devolve o direto.
+func plan_attack_path(u: Unit, dest: Vector2, exclude) -> PackedVector2Array:
+	var chariot := u.type == Cfg.CHARIOT
+	var cells := _obstacle_cells(u, exclude, u.center, dest)
+	if cells.is_empty():
+		return terrain.find_path(u.center, dest, chariot)
+	if _straight_fits(u, u.center, dest, exclude):
+		# a reta passa por um vão onde a unidade cabe estreitando a frente
+		var direct0: PackedVector2Array = terrain.find_path(u.center, dest, chariot)
+		if direct0.size() <= 2:
+			return direct0
+	var around: PackedVector2Array = terrain.find_path_blocked(u.center, dest, chariot, cells)
+	var straight := u.center.distance_to(dest)
+	if not around.is_empty():
+		var la := _path_len(u.center, around)
+		if la <= straight * 1.3 + 40.0:
+			return around
+		var direct: PackedVector2Array = terrain.find_path(u.center, dest, chariot)
+		if la <= _path_len(u.center, direct) * Cfg.DETOUR_RATIO + Cfg.DETOUR_ADD:
+			return around
+		return direct
+	return terrain.find_path(u.center, dest, chariot)
+
+func _path_len(from: Vector2, path: PackedVector2Array) -> float:
+	var l := 0.0
+	var c := from
+	for p in path:
+		l += c.distance_to(p)
+		c = p
+	return l
+
+## Células da grade de navegação ocupadas pelas formações das outras unidades, com folga
+## para a largura de u. Ignora as células perto da origem e do destino.
+func _obstacle_cells(u: Unit, exclude, a: Vector2, b: Vector2) -> Array:
+	var out: Array = []
+	var seen := {}
+	var m := minf(maxf(u.files * float(u.t.spacing), u.rows() * float(u.t.spacing)) * 0.5, 30.0) + 2.0
+	var cell := Cfg.NAV_CELL
+	for o: Unit in units:
+		if o == u or is_same(o, exclude) or o.state != 0 or o.n == 0:
+			continue
+		var sp: float = o.t.spacing
+		var hw := o.files * sp * 0.5 + m + cell * 0.5
+		var hd := o.rows() * sp * 0.5 + m + cell * 0.5
+		var f := o.facing
+		var r := Vector2(-f.y, f.x)
+		var ext := absf(r.x) * hw + absf(f.x) * hd
+		var exz := absf(r.y) * hw + absf(f.y) * hd
+		var c0: Vector2i = terrain._cell(o.center - Vector2(ext, exz))
+		var c1: Vector2i = terrain._cell(o.center + Vector2(ext, exz))
+		for cz in range(c0.y, c1.y + 1):
+			for cx in range(c0.x, c1.x + 1):
+				var wp := Vector2(-HALF + (cx + 0.5) * cell, -HALF + (cz + 0.5) * cell)
+				var d := wp - o.center
+				if absf(d.dot(r)) <= hw and absf(d.dot(f)) <= hd 						and wp.distance_squared_to(a) > 900.0 and wp.distance_squared_to(b) > 900.0:
+					var id := Vector2i(cx, cz)
+					if not seen.has(id):
+						seen[id] = true
+						out.append(id)
+	return out
+
+func _straight_fits(u: Unit, a: Vector2, b: Vector2, exclude) -> bool:
+	var l := a.distance_to(b)
+	if l < 1.0:
+		return true
+	var d := (b - a) / l
+	var grow := mini(Cfg.SQUEEZE_MIN_FILES + 1, u.n) * float(u.t.spacing) * 0.5
+	for o: Unit in units:
+		if o == u or is_same(o, exclude) or o.state != 0 or o.n == 0:
+			continue
+		var hit := _ray_rect(a, d, o, grow)
+		if hit.is_empty() or float(hit[1]) < 0.0 or float(hit[0]) > l:
+			continue
+		if float(hit[0]) <= 0.0 or float(hit[1]) >= l:
+			continue   # a origem ou o destino está colado nessa unidade
+		return false
+	return true

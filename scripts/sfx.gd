@@ -53,6 +53,14 @@ const STREAMS := {
 	"fundas": preload("res://assets/sounds/fundas.wav"),
 }
 
+# Laços de movimento (sintetizados por tools/gen_sounds.js, importados com loop):
+# cada tipo tem LOOP_PLAYERS players 3D, presos às unidades em marcha mais perto da câmera.
+const LOOPS := {
+	"passos": preload("res://assets/sounds/passos.wav"),
+	"carros": preload("res://assets/sounds/carros.wav"),
+}
+const LOOP_PLAYERS := 3
+
 const PAIN := ["dor01", "dor02", "dor03", "dor04", "dor05", "dor06",
 	"dor07", "dor08", "dor09", "dor10", "dor11", "dor12"]
 const POOL_3D := 24         # sons posicionados simultâneos; o mais antigo é cortado
@@ -68,6 +76,7 @@ var _voice: Node              # AudioStreamPlayer ou AudioStreamPlayer3D da voz 
 var _pool: Array = []         # AudioStreamPlayer3D
 var _pool_i := 0
 var _voice3d: AudioStreamPlayer3D
+var _loops := {}              # nome do laço -> Array de AudioStreamPlayer3D
 
 func _ready() -> void:
 	for k: String in STREAMS:
@@ -78,6 +87,13 @@ func _ready() -> void:
 	for i in POOL_3D:
 		_pool.append(_make_3d())
 	_voice3d = _make_3d()
+	for k: String in LOOPS:
+		var arr: Array = []
+		for i in LOOP_PLAYERS:
+			var p := _make_3d()
+			p.stream = LOOPS[k]
+			arr.append(p)
+		_loops[k] = arr
 
 func _make_3d() -> AudioStreamPlayer3D:
 	var p := AudioStreamPlayer3D.new()
@@ -130,6 +146,27 @@ func play_any_at(sounds: Array, at: Vector3, vol_db := 0.0, pitch := 1.0) -> voi
 ## Toca um som sorteado da lista.
 func play_any(sounds: Array, vol_db := 0.0) -> void:
 	play(sounds[randi() % sounds.size()], vol_db)
+
+## Atualiza o laço `name` (de LOOPS): `srcs` é uma lista de [posição, volume_db, pitch],
+## no máximo LOOP_PLAYERS; os players que sobram param. Um player que já toca só muda de
+## lugar, para o laço não recomeçar a cada atualização.
+func set_loop(name: String, srcs: Array) -> void:
+	var arr: Array = _loops.get(name, [])
+	for i in arr.size():
+		var p: AudioStreamPlayer3D = arr[i]
+		if i >= srcs.size():
+			if p.playing:
+				p.stop()
+			continue
+		p.global_position = srcs[i][0]
+		p.volume_db = srcs[i][1]
+		p.pitch_scale = srcs[i][2]
+		if not p.playing:
+			p.play(randf() * 3.5)
+
+func stop_loops() -> void:
+	for k in _loops:
+		set_loop(k, [])
 
 func playing(sound: String) -> bool:
 	var p: AudioStreamPlayer = _players.get(sound)

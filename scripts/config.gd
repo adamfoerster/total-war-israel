@@ -34,6 +34,15 @@ const HOUR_DEFAULT := 6.0
 const SECTOR_HALF := CONTROL_HALF / 3.0
 const DEPLOY_ORIGIN := [Vector2(-450, 480), Vector2(-450, -480)]   # frente da linha inicial, por lado
 const DEPLOY_FACING := [Vector2(0, -1), Vector2(0, 1)]
+const DETOUR_RATIO := 2.0     # perseguição de alvo: desvio em volta de unidades: até 2x o caminho direto...
+const DETOUR_ADD := 150.0     # ...mais 150 m; acima disso a unidade atravessa as outras
+# Postura: defensiva só luta se atacada; neutra ataca inimigos a menos de STANCE_ENGAGE m;
+# agressiva também ataca e persegue quem foge.
+const STANCE_DEFENSIVE := 0
+const STANCE_NEUTRAL := 1
+const STANCE_AGGRESSIVE := 2
+const STANCE_NAMES := ["defensiva", "neutra", "agressiva"]
+const STANCE_ENGAGE := 50.0   # m entre as bordas das formações para o ataque automático
 const CORPSE_CAP := 2500    # corpos desenhados por lado e tipo; os mais antigos somem primeiro
 const BLOOD_CAP := 8000     # poças desenhadas
 const MIN_LINE_FILES := 10      # largura mínima da linha: 10 soldados na frente

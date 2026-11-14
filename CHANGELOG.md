@@ -4,6 +4,28 @@ Todas as mudanças relevantes deste projeto são registradas aqui.
 
 O formato segue o [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e o projeto usa [versionamento semântico](https://semver.org/lang/pt-BR/).
 
+## [0.21.0] - 2026-11-13
+
+### Adicionado
+
+- Sons de marcha: passos para as unidades a pé e cascos e rodas para os carros, em laço e posicionados nas unidades em movimento (marchando ou em fuga) mais perto da câmera, 3 por tipo. Correndo, o som fica mais rápido. Os dois laços são sintetizados por `tools/gen_sounds.js`.
+
+## [0.20.0] - 2026-11-13
+
+### Adicionado
+
+- Postura das unidades (tecla T ou botão **Postura** no HUD), neutra por padrão. Defensiva: só luta se atacada e não persegue. Neutra: parada e sem alvo, ataca sozinha inimigos a menos de 50 m, mas não persegue fugitivos. Agressiva: ataca inimigos próximos e persegue quem foge.
+
+### Alterado
+
+- Unidades que não estão na postura agressiva deixam de perseguir um alvo que entra em pânico. Antes, toda unidade seguia o alvo até ele sair do mapa.
+
+## [0.19.1] - 2026-11-13
+
+### Corrigido
+
+- Tick médio acima de 40 ms na batalha IA × IA depois da mudança no cálculo de caminho: unidades que perseguiam um alvo atravessavam as outras e punham os soldados delas na grade. A perseguição volta a contornar as unidades no caminho; as ordens de movimento continuam considerando só o terreno.
+
 ## [0.19.0] - 2026-11-13
 
 ### Adicionado

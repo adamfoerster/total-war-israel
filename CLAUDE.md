@@ -13,6 +13,8 @@ godot --headless --path . --export-release "Web" build/web/index.html
 node tools/serve.js 8060                    # serve build/web
 ```
 
+Para publicar online, exporte o build Web e envie os arquivos de `build/web` (sem os `*.import`) por `scp` para `reinoeterno@reinoeterno.online:/home/reinoeterno/promisedland-battles.reinoeterno.online/`. O comando completo está na seção "Publicar online" do `README.md`.
+
 Rode `--simtest` depois de qualquer mudança em `battle_sim.gd`, `terrain_data.gd`, `ai_commander.gd` ou `config.gd`. Ele leva cerca de um minuto e termina com `FALHAS: 0` quando passa.
 
 O build Web só reflete o código depois de um novo export.

@@ -27,6 +27,7 @@ var feed_seen := 0
 var btn_rally: Button
 var btn_run: Button
 var btn_fire: Button
+var btn_stance: Button
 var btn_pause: Button
 var result: PanelContainer
 var fps_label: Label
@@ -114,6 +115,7 @@ func _ready() -> void:
 	_btn(row, "Parar (H)", battle.cmd_halt)
 	btn_rally = _btn(row, "Reunir (G)", battle.cmd_rally)
 	btn_fire = _btn(row, "Atirar à vontade (F)", battle.cmd_fire_toggle)
+	btn_stance = _btn(row, "Postura (T)", battle.cmd_stance_cycle)
 	_btn(row, "Selecionar todos", battle.select_all)
 	btn_pause = _btn(row, "Pausa (P)", func(): battle.paused = not battle.paused)
 	_btn(row, "Velocidade", _cycle_speed)
@@ -364,6 +366,7 @@ func _refresh() -> void:
 	if not sel.is_empty():
 		btn_run.text = "Andar (R)" if sel[0].running else "Correr (R)"
 		btn_fire.text = "Atirar à vontade: %s (F)" % ("sim" if sel[0].fire_at_will else "não")
+		btn_stance.text = "Postura: %s (T)" % Cfg.STANCE_NAMES[sel[0].stance]
 	var gen: Unit = null
 	for u: Unit in sim.units:
 		if u.side == 0 and u.is_general and u.general_alive and u.state == 0:

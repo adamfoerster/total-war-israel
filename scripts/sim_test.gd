@@ -44,6 +44,7 @@ func run() -> int:
 		_test_deaths(terrain)
 		_test_daylight()
 		_test_detour(terrain)
+		_test_stance(terrain)
 		_test_squeeze(terrain)
 		_test_rout_credit(terrain)
 		_test_surrender(terrain)
@@ -237,6 +238,42 @@ func _test_detour(terrain) -> void:
 			break
 	check(reached, "chega ao destino passando pela outra unidade")
 	check(a.center.distance_to(Vector2(-500, -900)) < 40.0, "chega perto do destino")
+
+func _test_stance(terrain) -> void:
+	print("[postura]")
+	var r := {}
+	for st in 3:
+		var s := new_sim(terrain)
+		var u := s.add_unit(0, Cfg.HEAVY, 100, false)
+		var near := s.add_unit(1, Cfg.LIGHT, 100, false)
+		s.place_unit(u, Vector2(-900, -900), Vector2(1, 0))
+		s.place_unit(near, Vector2(-830, -900), Vector2(-1, 0))
+		s.finalize()
+		u.stance = st
+		var gap := u.center.distance_to(near.center) - u.brad - near.brad
+		for k in 6:   # a postura é avaliada com a moral, a cada 5 ticks
+			s.tick(Cfg.TICK)
+		r[st] = [u.target != null, gap]
+		if st != Cfg.STANCE_DEFENSIVE:
+			s._start_rout(near)
+			for k in 6:
+				s.tick(Cfg.TICK)
+			r[st].append(u.target != null)
+	check(Cfg.STANCE_NEUTRAL == Unit.new().stance, "postura padrão é a neutra")
+	check(float(r[1][1]) < Cfg.STANCE_ENGAGE, "inimigo de teste fica a menos de 50 m (%.0f m)" % r[1][1])
+	check(not r[0][0], "defensiva não ataca sozinha")
+	check(r[1][0] and r[2][0], "neutra e agressiva atacam o inimigo próximo")
+	check(not r[1][2], "neutra não persegue quem foge")
+	check(r[2][2], "agressiva persegue quem foge")
+	var s2 := new_sim(terrain)
+	var a := s2.add_unit(0, Cfg.HEAVY, 100, false)
+	var far := s2.add_unit(1, Cfg.LIGHT, 100, false)
+	s2.place_unit(a, Vector2(-900, -900), Vector2(1, 0))
+	s2.place_unit(far, Vector2(-600, -900), Vector2(-1, 0))
+	s2.finalize()
+	for k in 6:
+		s2.tick(Cfg.TICK)
+	check(a.target == null, "neutra ignora inimigo a mais de 50 m")
 
 func _test_rout_credit(terrain) -> void:
 	print("[moral para quem pôs o inimigo em pânico]")

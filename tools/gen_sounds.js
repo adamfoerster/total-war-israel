@@ -1,4 +1,4 @@
-// Gera por síntese os sons dos projéteis (flechas e fundas) em assets/sounds/.
+// Gera por síntese os sons dos projéteis (flechas e fundas) e os laços de marcha (passos e carros) em assets/sounds/
 // Uso: node tools/gen_sounds.js
 // Determinístico (semente fixa): rodar de novo produz os mesmos arquivos.
 "use strict";
@@ -84,3 +84,86 @@ function volley({ count, spread, fHi, fLo, len, twang, q }) {
 
 writeWav("flechas.wav", volley({ count: 40, spread: 0.35, fHi: 3200, fLo: 1300, len: 0.9, twang: 0.35, q: 3.5 }));
 writeWav("fundas.wav", volley({ count: 25, spread: 0.4, fHi: 900, fLo: 380, len: 0.8, twang: 0.0, q: 2.5 }));
+
+// Laço sem emenda de `secs` segundos: cada evento é escrito com o índice dado a volta
+// (módulo n), então o fim encaixa no começo.
+function loopBuf(secs) { return new Float32Array(Math.floor(secs * SR)); }
+function addWrap(out, i, v) { const n = out.length; out[((i % n) + n) % n] += v; }
+
+// Marcha a pé: uns 40 soldados fora de passo, cada um com o seu ritmo (período que divide
+// o laço). Passo = baque grave + raspão de sandália no cascalho.
+function march() {
+	const secs = 4;
+	const out = loopBuf(secs);
+	const n = out.length;
+	for (let s = 0; s < 40; s++) {
+		const steps = 7 + Math.floor(rnd() * 2);   // 1,75 ou 2 passos por segundo
+		const per = n / steps;
+		const ph = rnd() * per;
+		const amp = rr(0.4, 1.0);
+		for (let k = 0; k < steps; k++) {
+			const t0 = Math.floor(ph + k * per + rr(-0.02, 0.02) * SR);
+			const f = rr(55, 85);
+			const st = makeBP();
+			const fc = rr(900, 2200);
+			for (let i = 0; i < Math.floor(0.12 * SR); i++) {
+				const thump = Math.sin(2 * Math.PI * f * i / SR) * Math.exp(-i / (0.03 * SR));
+				const crunch = bp(st, noise(), fc, 1.2) * Math.exp(-i / (0.035 * SR));
+				addWrap(out, t0 + i, amp * (0.9 * thump + 0.6 * crunch));
+			}
+		}
+	}
+	return out;
+}
+
+// Carros: cascos a galope (4 batidas por ciclo, cada cavalo no seu tempo) e o ronco
+// contínuo das rodas no chão, com rangidos de madeira de vez em quando.
+function chariots() {
+	const secs = 4;
+	const out = loopBuf(secs);
+	const n = out.length;
+	for (let h = 0; h < 8; h++) {
+		const cycles = 9 + Math.floor(rnd() * 3);   // 2,25 a 2,75 galopes por segundo
+		const per = n / cycles;
+		const ph = rnd() * per;
+		const amp = rr(0.5, 1.0);
+		const beats = [0, 0.12, 0.22, 0.38];         // padrão de galope dentro do ciclo
+		for (let c = 0; c < cycles; c++) {
+			for (const b of beats) {
+				const t0 = Math.floor(ph + c * per + b * per + rr(-0.008, 0.008) * SR);
+				const st = makeBP();
+				const fc = rr(500, 1100);
+				const f = rr(90, 130);
+				for (let i = 0; i < Math.floor(0.07 * SR); i++) {
+					const knock = bp(st, noise(), fc, 4) * Math.exp(-i / (0.012 * SR));
+					const thud = Math.sin(2 * Math.PI * f * i / SR) * Math.exp(-i / (0.02 * SR));
+					addWrap(out, t0 + i, amp * (1.3 * knock + 0.7 * thud));
+				}
+			}
+		}
+	}
+	// ronco das rodas: ruído grave com ondulação lenta (período que divide o laço)
+	const st = makeBP(), st2 = makeBP();
+	for (let i = 0; i < n + 2000; i++) {
+		const t = i / SR;
+		const mod = 0.7 + 0.3 * Math.sin(2 * Math.PI * t * 3 / secs) * Math.sin(2 * Math.PI * t * 5 / secs);
+		const v = mod * (0.9 * bp(st, noise(), 70, 0.8) + 0.25 * bp(st2, noise(), 260, 1.5));
+		if (i >= 2000) addWrap(out, i - 2000, v);   // descarta o transiente do filtro
+	}
+	// rangidos
+	for (let k = 0; k < 6; k++) {
+		const t0 = Math.floor(rnd() * n);
+		const l = Math.floor(rr(0.12, 0.25) * SR);
+		const f0 = rr(280, 420);
+		for (let i = 0; i < l; i++) {
+			const e = Math.sin(Math.PI * i / l);
+			const f = f0 * (1 + 0.15 * i / l);
+			const saw = ((f * i / SR) % 1) * 2 - 1;
+			addWrap(out, t0 + i, 0.12 * e * saw);
+		}
+	}
+	return out;
+}
+
+writeWav("passos.wav", march());
+writeWav("carros.wav", chariots());

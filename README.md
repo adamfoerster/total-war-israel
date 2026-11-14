@@ -2,7 +2,7 @@
 
 Jogo de batalhas táticas em tempo real ambientado na Terra Prometida nos tempos do Antigo Testamento. Feito em Godot 4 e jogado no navegador.
 
-A versão 0.19.0 tem um único mapa, Jerusalém, construído a partir de dados reais de elevação, e uma batalha contra a IA.
+A versão 0.21.0 tem um único mapa, Jerusalém, construído a partir de dados reais de elevação, e uma batalha contra a IA.
 
 ## Como jogar
 
@@ -31,6 +31,7 @@ A força de cada lado soma pontos pelos soldados das unidades sob controle (em f
 | Parar | H |
 | Reunir as tropas | G (só a unidade do general, uma vez por minuto): tropas num raio de 300 m ganham muita moral e as que fugiam voltam ao controle; as mais distantes ganham pouca moral |
 | Atirar à vontade | F |
+| Postura (defensiva, neutra, agressiva) | T ou botão **Postura** no HUD: passa as selecionadas para a postura seguinte |
 | Iniciar a batalha (fim do posicionamento) | Enter ou botão **Iniciar batalha** |
 | Render-se | Botão **Render-se** (pede confirmação) |
 | Pausa | P ou Espaço |
@@ -47,6 +48,16 @@ As unidades só são selecionadas pelos cards. Ordens para fora da área control
 | Fundeiros | Atiradores de alcance médio, mais munição | 60 / 20–100 |
 | Arqueiros | Atiradores de alcance longo | 60 / 20–100 |
 | Carros de Guerra | Carga forte, 2 homens por carro, não sobem declives acima de 15° | 20 / 10–50 |
+
+### Postura
+
+Cada unidade tem uma postura, que decide o que ela faz sozinha. O padrão é a neutra.
+
+- **Defensiva:** só luta se for atacada. Atiradores só disparam à vontade em quem a tem como alvo. Não persegue fugitivos.
+- **Neutra:** parada e sem alvo, ataca sozinha o inimigo que chegar a menos de 50 m (de borda a borda das formações). Não persegue fugitivos: se o alvo entra em pânico, ela para.
+- **Agressiva:** ataca inimigos próximos como a neutra e persegue quem foge.
+
+Atiradores com munição não avançam pelo ataque automático; continuam atirando à vontade. Uma ordem de ataque dada a uma unidade que já foge é cumprida em qualquer postura.
 
 ### Status de cada unidade
 
@@ -76,7 +87,8 @@ As escolhas são guardadas em `user://settings.cfg` e valem nas próximas partid
 
 ### Caminhos e desvios
 
-- O caminho de uma ordem de movimento ou de ataque só desvia de obstáculos do terreno (declives que o tipo da unidade não vence). Outras unidades no trajeto não são contornadas: muitas vezes já terão saído do caminho quando a unidade chegar lá.
+- O caminho de uma ordem de movimento só desvia de obstáculos do terreno (declives que o tipo da unidade não vence). Outras unidades no trajeto não são contornadas: muitas vezes já terão saído do caminho quando a unidade chegar lá.
+- Quem persegue um alvo (ordem de ataque) recalcula o caminho a cada 1 a 1,5 s e dá a volta nas unidades que estão no caminho naquele momento. Só passa por entre elas se o desvio for muito grande (mais que o dobro do caminho direto mais 150 m) ou se não houver caminho livre.
 - Se encontra outras unidades no trajeto, a unidade passa pelo vão entre elas estreitando a frente: o vão é medido à frente dela e a nova frente é o número de soldados que cabem no vão menos um (arredondado para baixo; num vão de 6, a frente vira 5). Depois de passar, volta à largura original. Abaixo de 3 soldados na frente ela não estreita e passa por entre as unidades, como antes.
 - Soldados só andam quando o passo os aproxima do posto: os que não têm espaço ficam parados em vez de tremer no lugar.
 - Unidades selecionadas mostram o caminho que vão percorrer, em seta branca opaca. Ao passar o mouse sobre o estandarte de uma unidade amiga não selecionada que esteja em movimento, aparecem o caminho e o quadrado do destino com 50% de transparência.
@@ -100,7 +112,7 @@ Quem morre fica no campo: o corpo cai deitado (o carro tomba de lado) e uma poç
 
 ## Sons
 
-Os sons ficam em `assets/sounds/` e são tocados por `scripts/sfx.gd`. Os cliques e os sons de vitória e derrota vêm do jogo de tabuleiro Promised Land; as vozes são próprias deste jogo. Os gritos de dor são trechos de [Male Grunt/Yelling sounds](https://opengameart.org/content/male-gruntyelling-sounds), de HaelDB (OpenGameArt, CC0), cortados e convertidos para mono. Os sons de flechas e fundas são sintetizados por `tools/gen_sounds.js` (`node tools/gen_sounds.js` os recria). Só uma voz toca por vez: a nova interrompe a anterior.
+Os sons ficam em `assets/sounds/` e são tocados por `scripts/sfx.gd`. Os cliques e os sons de vitória e derrota vêm do jogo de tabuleiro Promised Land; as vozes são próprias deste jogo. Os gritos de dor são trechos de [Male Grunt/Yelling sounds](https://opengameart.org/content/male-gruntyelling-sounds), de HaelDB (OpenGameArt, CC0), cortados e convertidos para mono. Os sons de flechas e fundas e os laços de marcha (`passos` e `carros`) são sintetizados por `tools/gen_sounds.js` (`node tools/gen_sounds.js` os recria). Só uma voz toca por vez: a nova interrompe a anterior.
 
 Os sons de fuga, de dor e de disparo saem do ponto do mapa onde está a unidade: a câmera é o ouvinte, então uma unidade fora da tela à esquerda é ouvida pela esquerda, e o volume cai com a distância. Os choques do combate também saem das unidades em combate. Os demais sons (ordens, interface) tocam sem posição.
 
@@ -118,6 +130,8 @@ Os sons de fuga, de dor e de disparo saem do ponto do mapa onde está a unidade:
 | Pânico da unidade do general (suas tropas) | `fuga-general` ou `fuga-general2`, sorteado, vindo da unidade |
 | Pânico de outra unidade sua | `fuga1` ou `fuga2`, sorteado, vindo da unidade |
 | Unidade perde homens (qualquer lado) | `dor01` a `dor12` (4 vozes), sorteados, vindos da unidade; no máximo um a cada ~1,6 s por unidade, mais alto com mais baixas de uma vez |
+| Unidade a pé em marcha ou em fuga (qualquer lado) | `passos` em laço: uns 40 soldados fora de passo, com baques e raspões no cascalho. Toca nas 3 unidades a pé em movimento mais perto da câmera, mais rápido quando correm e mais alto nas unidades maiores |
+| Carros em marcha ou em fuga | `carros` em laço: cascos a galope, ronco das rodas e rangidos de madeira, nos 3 carros em movimento mais perto da câmera |
 | Volley de arqueiros | `flechas`, vindo da unidade que dispara |
 | Volley de fundeiros | `fundas`, vindo da unidade que dispara |
 | General reúne as tropas (G) | `reunir` |
@@ -140,6 +154,19 @@ node tools/serve.js 8060
 ```
 
 Também é possível abrir o projeto no editor do Godot e rodar a cena principal.
+
+## Publicar online
+
+O jogo fica em https://promisedland-battles.reinoeterno.online/. Para publicar uma versão nova:
+
+1. Exporte o build Web (veja acima). O build só reflete o código depois de um novo export.
+2. Envie os arquivos de `build/web` por SSH para a pasta do site, sem os `*.import` (são arquivos do editor):
+
+```bash
+cd build/web && scp index.html index.js index.wasm index.pck index.audio.worklet.js index.audio.position.worklet.js index.png index.icon.png index.apple-touch-icon.png reinoeterno@reinoeterno.online:/home/reinoeterno/promisedland-battles.reinoeterno.online/
+```
+
+3. Abra o site e confira se ele carrega. O build não usa threads, então o servidor (Apache) não precisa de cabeçalhos especiais.
 
 ## Testes
 

@@ -67,6 +67,7 @@ var stones: MultiMeshInstance3D
 var stone_list: Array = []    # [de3, para3, t, dur]
 var ended := false
 var fight_t := 0.0   # intervalo até o próximo som de combate
+var move_snd_t := 0.0  # intervalo até reatribuir os laços de marcha
 var corpses := {}             # lado * 10 + tipo -> [MultiMesh, total já desenhado]
 var blood_mm: MultiMesh
 var blood_n := 0
@@ -361,6 +362,7 @@ func _process(delta: float) -> void:
 	_event_sounds()
 	_pain_sounds(delta * speed)
 	_combat_sound(delta)
+	_move_sounds(delta)
 	if marker_t > 0.0:
 		marker_t -= delta
 		marker.visible = marker_t > 0.0
@@ -378,6 +380,41 @@ func _attack_sound() -> void:
 	var own := {Cfg.CHARIOT: "carruagens", Cfg.ARCHER: "arqueiros", Cfg.HEAVY: "infantaria-pesada"}
 	var voice: String = own.get(u.type, "ataquem")
 	sfx.play(voice if randf() < 0.1 else "sword")
+
+## Sons de marcha: passos das unidades a pé e cascos e rodas dos carros. A cada 0,25 s
+## os laços se prendem às unidades em movimento (marchando ou em fuga, de qualquer lado)
+## mais perto da câmera, Sfx.LOOP_PLAYERS por tipo. Correndo, o laço toca mais rápido;
+## unidades maiores soam mais alto.
+func _move_sounds(delta: float) -> void:
+	if paused or ended or deploying:
+		sfx.stop_loops()
+		return
+	move_snd_t -= delta
+	if move_snd_t > 0.0:
+		return
+	move_snd_t = 0.25
+	var cam := get_viewport().get_camera_3d()
+	if cam == null:
+		return
+	var eye := cam.global_position
+	var foot: Array = []
+	var cars: Array = []
+	for u: Unit in sim.units:
+		if u.n == 0 or not (u.state == 1 or (u.state == 0 and not u.path.is_empty())):
+			continue
+		var p := _unit_pos3(u)
+		var item := [eye.distance_squared_to(p), p, u]
+		(cars if u.type == Cfg.CHARIOT else foot).append(item)
+	for pair in [["passos", foot], ["carros", cars]]:
+		var list: Array = pair[1]
+		list.sort_custom(func(a, b): return a[0] < b[0])
+		var srcs: Array = []
+		for i in mini(list.size(), Sfx.LOOP_PLAYERS):
+			var u: Unit = list[i][2]
+			var fast := u.running or u.state == 1
+			var vol := linear_to_db(clampf(u.men() / 150.0, 0.3, 1.0)) - 4.0
+			srcs.append([list[i][1], vol, 1.25 if fast else 1.0])
+		sfx.set_loop(pair[0], srcs)
 
 ## Ponto da unidade no mundo, para os sons posicionados.
 func _unit_pos3(u: Unit) -> Vector3:
@@ -690,6 +727,17 @@ func cmd_fire_toggle() -> void:
 	for u: Unit in selected:
 		u.fire_at_will = v
 
+## Troca a postura das selecionadas: defensiva -> neutra -> agressiva -> defensiva.
+## Todas recebem a postura seguinte à da primeira.
+func cmd_stance_cycle() -> void:
+	sfx.play("menu", -6.0)
+	_prune()
+	if selected.is_empty():
+		return
+	var v: int = ((selected[0] as Unit).stance + 1) % 3
+	for u: Unit in selected:
+		u.stance = v
+
 func _unhandled_input(ev: InputEvent) -> void:
 	if not ready_ok or ended:
 		return
@@ -720,6 +768,8 @@ func _unhandled_input(ev: InputEvent) -> void:
 			cmd_halt()
 		elif k == KEY_F:
 			cmd_fire_toggle()
+		elif k == KEY_T:
+			cmd_stance_cycle()
 		elif k == KEY_P or k == KEY_SPACE:
 			paused = not paused
 		elif k == KEY_A and (ev as InputEventKey).ctrl_pressed:
